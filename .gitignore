@@ -1,0 +1,9 @@
+node_modules/
+.ref/
+.tools/
+.tmp/
+data/
+*.log
+*.bak-*
+package-lock.json
+tools/pool.json
