@@ -17,7 +17,8 @@ import { homedir } from 'node:os'
 import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
 import { buildPool } from './lib/pool.mjs'
-import { writeReason, loadReasonCache, saveReasonCache } from './lib/reasons.mjs'
+import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile } from './lib/reasons.mjs'
+import { todayUsage } from './lib/usage.mjs'
 import { curate } from './lib/curator.mjs'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
@@ -143,6 +144,8 @@ export function apply(ctx, config) {
   const shownFile = join(stateDir, 'shown.json')
   const reasonsFile = join(stateDir, 'reasons.json')
   const overridesFile = join(stateDir, 'config.json')
+  const usageFile = join(stateDir, 'usage.json')
+  setUsageFile(usageFile)
   const version = (() => {
     try { return String(JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8')).version || '') } catch { return '' }
   })()
@@ -286,7 +289,7 @@ export function apply(ctx, config) {
     }
 
     if (req.method === 'GET' && p === '/state') {
-      return sendJson(res, 200, { ok: true, stateDir, config: cfgNow(), overrides, feedTs: feedCache?.ts ?? null, poolSize: prevPool.length })
+      return sendJson(res, 200, { ok: true, stateDir, config: cfgNow(), overrides, feedTs: feedCache?.ts ?? null, poolSize: prevPool.length, usage: todayUsage(usageFile) })
     }
 
     if (req.method === 'POST' && p === '/config') {
@@ -321,6 +324,39 @@ export function apply(ctx, config) {
 
     if (req.method === 'GET' && p === '/explain') {
       const force = url.searchParams.get('force') === '1'
+      const bvid = url.searchParams.get('bvid')
+      if (bvid) {
+        // 单条展开：写一段「为什么推荐」的话（比一句话长）
+        const all = [...(feedCache?.main || []), ...(feedCache?.shortlist || []), ...(feedCache?.up || [])]
+        const item = all.find((x) => x.bvid === bvid)
+        if (!item) return sendJson(res, 404, { ok: false, error: '这条不在当前片单里' })
+        const hit = reasons[bvid]
+        if (hit?.long && !force) return sendJson(res, 200, { ok: true, bvid, long: hit.long, cached: true })
+        const style = cfgNow().reasonStyle
+        const dur = Math.round((item.duration || 0) / 60)
+        const system = [
+          '你在替一个人解释「为什么把这条视频挑给他」。',
+          '写 100–160 字的一段话：它讲了什么、对你有什么价值、适合什么时候看、有什么坑要提醒。',
+          '具体、不吹、不用感叹号；不要复述标题；不要用「这条视频」开头。',
+          style ? `语气与风格：${style}` : '语气与风格：像一个了解他口味的朋友。',
+        ].join('\n')
+        const user = [
+          `标题：${item.title}`,
+          `UP：${item.author}`,
+          `时长：${dur} 分钟`,
+          `分区：${item.typeName || '未知'}`,
+          `tag：${(item.tags || []).join('、') || '（无）'}`,
+          `数据：播放 ${item.play}，赞率 ${item.pct?.like ?? '?'}%，币率 ${item.pct?.coin ?? '?'}%，藏率 ${item.pct?.fav ?? '?'}%`,
+          `命中的轴：${item.axis || ''}${item.sub ? ' · ' + item.sub : ''}`,
+          item.why ? `一句话理由：${item.why}` : '',
+        ].filter(Boolean).join('\n')
+        const long = await writeReasonCore(ctx, { system, user, maxTokens: 400, timeoutMs: 45000 })
+        if (long) {
+          reasons[bvid] = { ...(reasons[bvid] || {}), long, at: Date.now() }
+          saveReasonCache(reasonsFile, reasons)
+        }
+        return sendJson(res, 200, { ok: Boolean(long), bvid, long, cached: false })
+      }
       const r = await getReasons(force)
       return sendJson(res, 200, r)
     }

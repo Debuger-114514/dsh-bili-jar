@@ -101,6 +101,17 @@
 .cfg .save{align-self:flex-start;font-size:11.5px;padding:5px 14px;border-radius:7px;cursor:pointer;
   font-family:inherit;border:1px solid rgba(59,130,246,.45);background:rgba(59,130,246,.16);color:#93c5fd;}
 .cfg .tip{font-size:10.5px;color:#6b7280;line-height:15px;}
+.cfg .ced{display:flex;flex-direction:column;gap:5px;}
+.chips2{display:flex;flex-wrap:wrap;gap:5px;align-items:center;}
+.chip2{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 7px;border-radius:6px;
+  background:rgba(59,130,246,.16);color:#bfdbfe;border:1px solid rgba(59,130,246,.3);}
+.chip2 .x{cursor:pointer;font-weight:700;opacity:.7;font-style:normal;}
+.chip2 .x:hover{opacity:1;color:#fca5a5;}
+.cfg .add{width:88px;padding:3px 7px;border-radius:6px;font-size:11px;font-family:inherit;color:#e8eaed;
+  background:rgba(255,255,255,.05);border:1px dashed rgba(255,255,255,.2);}
+.cfg .add:focus{outline:none;border-color:rgba(59,130,246,.6);border-style:solid;}
+.av{width:18px;height:18px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;color:#0b1220;background:#93c5fd;margin-right:5px;vertical-align:-3px;}
 `
 
       const JAR_SVG = `
@@ -315,9 +326,28 @@
 
           const p = it.pct || {}
           const rate = (p.like != null) ? ` · 赞${p.like}% 币${p.coin}% 藏${p.fav}%` : ''
-          box.appendChild(el('div', 'meta', `${it.author || ''} · ${fmtPlay(it.play)}播放 · ${fmtAgo(it.pubdate)}${rate}`))
+          const meta = el('div', 'meta')
+          meta.appendChild(el('span', 'av', String(it.author || '?').slice(0, 1)))
+          meta.appendChild(document.createTextNode(`${it.author || ''} · ${fmtPlay(it.play)}播放 · ${fmtAgo(it.pubdate)}${rate}`))
+          box.appendChild(meta)
+
           const whyText = it.why || reasonsMap[it.bvid]
-          if (whyText) box.appendChild(el('div', 'why2', whyText))
+          if (whyText) {
+            const w = el('div', 'why2', whyText)
+            w.title = '点开看更长的理由'
+            w.style.cursor = 'pointer'
+            w.addEventListener('click', async () => {
+              if (w.dataset.open) { w.textContent = whyText; delete w.dataset.open; return }
+              w.textContent = whyText + ' …'
+              try {
+                const res = await fetch(API + '/explain?bvid=' + encodeURIComponent(it.bvid), { credentials: 'same-origin' })
+                const d = await res.json()
+                if (d.ok && d.long) { w.textContent = whyText + ' ｜ ' + d.long; w.dataset.open = '1' }
+                else w.textContent = whyText
+              } catch { w.textContent = whyText }
+            })
+            box.appendChild(w)
+          }
 
           if (it.reasons?.length) box.appendChild(el('div', 'why', it.reasons.join(' · ')))
 
@@ -356,6 +386,7 @@
             const res = await fetch(API + '/state', { credentials: 'same-origin', cache: 'no-store' })
             const data = await res.json()
             cfgDraft = { ...(data.config || {}) }
+            if (data.usage) cfgDraft.usage = data.usage
             if (tab === 'cfg') render()
           } catch { /* 读不到就空着 */ }
         }
@@ -401,6 +432,44 @@
           box.appendChild(rowOf('让模型当策展人', mkSwitch('curatorOn')))
           box.appendChild(rowOf('给每条写理由', mkSwitch('explainOn')))
 
+          // ---- 可编辑的词表：兴趣轴 / 固定关注 ----
+          const chipEditor = (key, title, placeholder) => {
+            const wrap = el('div', 'ced')
+            wrap.appendChild(el('div', 'lbl', title))
+            const chips = el('div', 'chips2')
+            const draw = () => {
+              chips.textContent = ''
+              for (const v of (cfgDraft[key] || [])) {
+                const c = el('span', 'chip2', String(v))
+                const x = el('b', 'x', '×')
+                x.addEventListener('click', async () => {
+                  cfgDraft[key] = (cfgDraft[key] || []).filter((z) => z !== v)
+                  await saveConfig({ [key]: cfgDraft[key] })
+                  draw()
+                })
+                c.appendChild(x)
+                chips.appendChild(c)
+              }
+              const inp = el('input', 'add')
+              inp.placeholder = placeholder
+              inp.addEventListener('keydown', async (e) => {
+                if (e.key !== 'Enter') return
+                const v = inp.value.trim()
+                if (!v) return
+                cfgDraft[key] = [...(cfgDraft[key] || []), v]
+                inp.value = ''
+                await saveConfig({ [key]: cfgDraft[key] })
+                draw()
+              })
+              chips.appendChild(inp)
+            }
+            draw()
+            wrap.appendChild(chips)
+            return wrap
+          }
+          box.appendChild(chipEditor('axes', '兴趣轴（回车加，× 删）', '例如 数码'))
+          box.appendChild(chipEditor('ups', '固定关注的 UP（UID 或名字）', '例如 江平舟'))
+
           box.appendChild(el('div', 'lbl', '语言风格'))
           const ta = el('textarea', 'ta')
           ta.rows = 4
@@ -417,15 +486,20 @@
             setTimeout(() => { save.textContent = '保存' }, 1600)
           })
           box.appendChild(save)
-          box.appendChild(el('div', 'tip', '改完点「换一批」会按新风格重新挑。'))
+
+          if (cfgDraft.usage) {
+            const u = cfgDraft.usage
+            box.appendChild(el('div', 'tip', `今天 ${u.calls} 次调用 · 约 ${u.inTok + u.outTok} tokens · ¥${u.cost}（估算）`))
+          }
+          box.appendChild(el('div', 'tip', '改完点「换一批」会按新设置重新挑。'))
 
           bd.appendChild(box)
         }
 
         function render() {
           bd.textContent = ''
-          if (loading) { msg('正在装罐…（十几秒）'); return }
           if (tab === 'cfg') { renderCfg(); return }
+          if (loading) { msg('正在装罐…（十几秒）'); return }
 
           if (tab === 'later') {
             if (!later.length) { msg('待看是空的。看到感兴趣的但没空看，就点「稍后看」。'); return }
