@@ -226,6 +226,14 @@
 .mini-x:hover{background:#ffe6ec;}
 .mini iframe{display:block;width:100%;aspect-ratio:16/9;border:0;background:#000;}
 
+/* 折叠小节（默认收起，点开才展开） */
+.cfg .fold{display:flex;align-items:center;gap:6px;width:100%;text-align:left;font-family:inherit;
+  font-size:11.5px;font-weight:700;color:#33437f;background:transparent;border:0;padding:3px 0;cursor:pointer;}
+.cfg .fold::before{content:'▸';font-size:10px;color:#8ba0c8;transition:transform .15s;display:inline-block;}
+.cfg .fold[data-open]::before{content:'▾';}
+.cfg .fold:hover{color:var(--ink);}
+.cfg .foldbody{margin-top:2px;}
+
 /* 头像选择条 */
 .avstrip{display:flex;gap:8px;flex-wrap:wrap;}
 .avpick{position:relative;width:58px;padding:0;border:2px solid transparent;border-radius:13px;background:transparent;
@@ -767,10 +775,21 @@
 
           // ---- 轴的细分（子簇）：决定每小时轮换的搜索词 ----
           const treeWrap = el('div', 'ced')
-          treeWrap.appendChild(el('div', 'lbl', '轴的细分（子簇，轮换搜索用；没有子簇也能跑）'))
+          const treeHead = el('button', 'fold', '轴的细分（子簇）')
+          treeHead.type = 'button'
           const treeBox = el('div', 'ced')
-          const treeMsg = el('div', 'tip', '自带的删不掉；「看建议」是从你池子里的 tag 挖出来的，点了才生效')
-          treeWrap.append(treeBox, treeMsg)
+          const treeMsg = el('div', 'tip', '自带的删不掉；「看建议」先从池子里挖，再让模型筛一遍（约 ¥0.002）')
+          const treeBody = el('div', 'foldbody')
+          treeBody.append(treeBox, treeMsg)
+          // 默认收起：这块又长又不常用，展开状态在本次会话里记住
+          treeBody.hidden = !treeOpen
+          if (treeOpen) treeHead.dataset.open = '1'
+          treeHead.onclick = () => {
+            treeOpen = !treeOpen
+            treeBody.hidden = !treeOpen
+            if (treeOpen) { treeHead.dataset.open = '1'; paintTree() } else { delete treeHead.dataset.open }
+          }
+          treeWrap.append(treeHead, treeBody)
           box.appendChild(treeWrap)
 
           const treeApi = async (body) => {
@@ -825,7 +844,7 @@
                   const x = el('i', 'x', '×')
                   x.onclick = async () => {
                     await treeApi({ axis: ax, action: 'delSub', name: sub.name })
-                    paintTree()
+                    if (treeOpen) paintTree()
                   }
                   c.appendChild(x)
                 }
