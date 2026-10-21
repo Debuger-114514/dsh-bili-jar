@@ -147,6 +147,7 @@ function sendJson(res, code, obj) {
   res.writeHead(code, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
     'content-length': Buffer.byteLength(body),
   })
   res.end(body)
@@ -718,7 +719,8 @@ export function apply(ctx, config) {
     }
 
     if (req.method === 'POST' && p === '/avatar') {
-      const body = await readBody(req)
+      // 默认 64KB 装不下一张 base64 图，之前这里必挂（表现是"只认 png/jpeg"，很误导）
+      const body = await readBody(req, 6 * 1024 * 1024)
       const dataUrl = String(body?.dataUrl || '')
       const m = /^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl)
       if (!m) return sendJson(res, 400, { ok: false, error: '只认 png / jpeg / webp 的 base64' })
@@ -785,7 +787,8 @@ export function apply(ctx, config) {
       const r = await loginPoll(key)
       if (r.state === 'ok' && r.credential) {
         try {
-          writeFileSync(join(stateDir, 'credential.json'), JSON.stringify(r.credential), 'utf8')
+          const credFile = join(stateDir, 'credential.json')
+          writeFileSync(credFile, JSON.stringify(r.credential), { encoding: 'utf8', mode: 0o600 })
           adoptCookies(r.credential)
           adoptedAt = Date.now()
           logInfo('login:ok', '凭证已保存到插件家目录')
@@ -976,6 +979,14 @@ export function apply(ctx, config) {
       kind: 'prefix',
       path: '/api/bili-jar',
       handler: async (req, res) => {
+        // 只服务本机页面：别的站点发来的请求一律拒掉。
+        // （不发 Origin 的老工具/curl 仍然能用；浏览器跨站请求一定会带这俩头之一。）
+        const site = String(req.headers['sec-fetch-site'] || '')
+        const origin = String(req.headers.origin || '')
+        if (site === 'cross-site' || (origin && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin))) {
+          res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' })
+          return res.end(JSON.stringify({ ok: false, error: 'cross-origin request refused' }))
+        }
         try { await handle(req, res, new URL(req.url, 'http://127.0.0.1')) } catch (e) {
           sendJson(res, 500, { ok: false, error: e?.message ?? String(e) })
         }
