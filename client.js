@@ -725,7 +725,7 @@
             return b
           }
           box.appendChild(rowOf('让模型当策展人', mkSwitch('curatorOn')))
-          box.appendChild(rowOf('给每条写理由', mkSwitch('explainOn')))
+          box.appendChild(rowOf('点开时展开更长的理由', mkSwitch('explainOn')))
 
           // ---- 可编辑的词表：兴趣轴 / 固定关注 ----
           const chipEditor = (key, title, placeholder) => {
@@ -793,6 +793,7 @@
                 if (!d.ok) { avMsg.textContent = d.error || '换不了'; return }
                 cfgDraft.avatarPreset = key
                 avMsg.textContent = '已换成「' + label + '」'
+                faceImg.src = API + '/avatar?t=' + Date.now()   // 页头那个是常驻的，render() 不会重建它
                 render()
               } catch { avMsg.textContent = '换不了' }
             })
@@ -834,6 +835,7 @@
                 const d = await r.json()
                 if (!d.ok) { avMsg.textContent = d.error || '换失败'; return }
                 avMsg.textContent = '换好了 ✓'
+                faceImg.src = API + '/avatar?t=' + Date.now()
                 render()
               } catch { avMsg.textContent = '上传失败' }
             }
@@ -843,7 +845,11 @@
             try {
               const r = await fetch(API + '/avatar', { method: 'DELETE', credentials: 'same-origin' })
               const d = await r.json()
-              if (d.ok) { avMsg.textContent = '已恢复默认'; render() }
+              if (d.ok) {
+                avMsg.textContent = '已恢复默认'
+                faceImg.src = API + '/avatar?t=' + Date.now()
+                render()
+              }
             } catch { avMsg.textContent = '恢复失败' }
           })
 
@@ -998,7 +1004,9 @@
 
           box.append(styleRow, styleRow2, saveRow, styleMsg)
 
-          const drawStyles = (map) => {
+          let builtinStyles = []
+          const drawStyles = (map, builtin) => {
+            if (Array.isArray(builtin)) builtinStyles = builtin
             styleSel.textContent = ''
             const names = Object.keys(map || {})
             if (!names.length) {
@@ -1010,13 +1018,13 @@
             for (const n of names) {
               const o = document.createElement('option')
               o.value = n
-              o.textContent = n
+              o.textContent = builtinStyles.includes(n) ? n + ' · 自带' : n
               styleSel.appendChild(o)
             }
           }
           fetch(API + '/style', { credentials: 'same-origin', cache: 'no-store' })
             .then((r) => r.json())
-            .then((d) => { if (d.ok) drawStyles(d.presets) })
+            .then((d) => { if (d.ok) drawStyles(d.presets, d.builtin) })
             .catch(() => drawStyles({}))
 
           styleSave.addEventListener('click', async () => {
@@ -1026,7 +1034,7 @@
             try {
               const d = await styleApi({ action: 'save', name, text: ta.value })
               if (!d.ok) { styleMsg.textContent = d.error || '保存失败'; return }
-              drawStyles(d.presets)
+              drawStyles(d.presets, builtinStyles)
               styleSel.value = name
               styleName.value = ''
               styleMsg.textContent = `已存下「${name}」`
@@ -1041,7 +1049,7 @@
               if (!d.ok) { styleMsg.textContent = d.error || '应用失败'; return }
               ta.value = d.text || ''
               cfgDraft.reasonStyle = ta.value
-              drawStyles(d.presets)
+              drawStyles(d.presets, builtinStyles)
               styleSel.value = name
               styleMsg.textContent = `已切到「${name}」，新的理由会按它写`
             } catch { styleMsg.textContent = '应用失败' }
@@ -1052,7 +1060,9 @@
             if (!name) return
             try {
               const d = await styleApi({ action: 'delete', name })
-              if (d.ok) { drawStyles(d.presets); styleMsg.textContent = `删掉「${name}」` }
+              if (!d.ok) { styleMsg.textContent = d.error || '删不掉'; return }
+              drawStyles(d.presets, builtinStyles)
+              styleMsg.textContent = `删掉「${name}」`
             } catch { styleMsg.textContent = '删除失败' }
           })
 
@@ -1070,7 +1080,7 @@
               cfgDraft.reasonStyle = text
               try {
                 const d = await styleApi({ action: 'import', name, text })
-                if (d.ok) { drawStyles(d.presets); styleSel.value = name }
+                if (d.ok) { drawStyles(d.presets, builtinStyles); styleSel.value = name }
                 await saveConfig({ reasonStyle: text })
                 styleMsg.textContent = `已导入「${name}」· ${text.length} 字，并保存`
               } catch { styleMsg.textContent = '导入失败' }

@@ -35,6 +35,19 @@ const AVATAR_PRESETS = {
   other: { file: 'av-other.png', label: '哦鲸鲸' },
 }
 const DEFAULT_AVATAR_PRESET = 'sleep'
+
+/** 下载就带的语气预设。用户可以覆盖同名（自己的优先），但不能删 */
+const BUILTIN_STYLES = {
+  '鲸鱼女仆': [
+    '像蓝发鲸鱼女仆在推荐：语气软、句子短、带一点俏皮，但不说废话，不堆感叹号。',
+    '称呼用户为 老大',
+    '知道自己是 deepseek 鲸鱼娘',
+    '语句不要太僵硬，能开玩笑最好',
+    '自称 本鱼🐟',
+  ].join('\n'),
+  '正经简报': '像同事给你递一页摘要：先结论后细节，不用语气词，不评价好坏，只说这期讲了什么、值不值得花这个时间。',
+  '损友吐槽': '像一个嘴毒但靠谱的朋友：先说一句损的，再老实讲值不值得看。可以有情绪，但别为了刻薄而刻薄。',
+}
 const { z, notes: hostNotes } = await loadHostDeps()
 
 export const name = 'dsh-bili-jar'
@@ -268,6 +281,44 @@ export function apply(ctx, config) {
     }
   }
 
+  /** 攒够这么多条赞/踩，才允许它们参与打分（太少会过拟合） */
+  const FEEDBACK_MIN = 20
+
+  /**
+   * 把 feedback.jsonl 折成「UP → 次数」「tag → 次数」，喂给 pool 做微调。
+   * bvid → UP/tag 的映射从池子和当前片单里找（都是刚落过盘的）。
+   */
+  function affinityOf() {
+    let rows = []
+    try {
+      rows = readFileSync(feedbackFile, 'utf8').split(/\r?\n/).filter(Boolean)
+        .map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+    } catch { rows = [] }
+    const meta = new Map()
+    for (const it of [...(prevPool || []), ...((feedCache && feedCache.main) || [])]) {
+      if (it?.bvid) meta.set(it.bvid, it)
+    }
+    const authors = new Map()
+    const dislikes = new Map()
+    const tags = new Map()
+    const tagDislikes = new Map()
+    const bump = (m, k) => { if (k) m.set(k, (m.get(k) || 0) + 1) }
+    for (const r of rows) {
+      const m = meta.get(r.bvid)
+      if (!m) continue
+      const up = String(m.mid || m.author || '')
+      if (r.action === 'like') {
+        bump(authors, up)
+        for (const t of (m.tags || []).slice(0, 6)) bump(tags, t)
+      } else if (r.action === 'dislike') {
+        bump(dislikes, up)
+        for (const t of (m.tags || []).slice(0, 6)) bump(tagDislikes, t)
+      }
+    }
+    const ready = rows.length >= FEEDBACK_MIN
+    return { ready, total: rows.length, authors, dislikes, tags, tagDislikes }
+  }
+
   /**
    * 如果需要，接管 bili-scroll 的 B站 登录（只为了取 AI 字幕）。
    * ⚠️ 不勾选时**绝不**去读那个文件。
@@ -349,7 +400,9 @@ export function apply(ctx, config) {
         const cfg = cfgNow()
         maybeAdoptLogin(cfg)
         const exclude = force ? lastShown : []
-        const r = await buildPool({ ...cfg, exclude }, (m) => log(m), prevPool)
+        const aff = affinityOf()
+        if (aff.ready) logInfo('affinity:on', `${aff.total} 条赞踩参与打分`)
+        const r = await buildPool({ ...cfg, exclude, affinity: aff }, (m) => log(m), prevPool)
         logInfo('feed:built', JSON.stringify(r.stats || {}))
         const out = { ...r, tookMs: Date.now() - t0, cached: false, excluded: exclude.length }
         feedCache = out
@@ -487,25 +540,30 @@ export function apply(ctx, config) {
      * 存在 config.json 的 `stylePresets`（名字 → 风格正文）。
      * 前端「导入 .md」读出来的文字也走这里，一键落成预设。 */
     if (req.method === 'GET' && p === '/style') {
-      return sendJson(res, 200, { ok: true, presets: overrides.stylePresets || {}, current: String(cfgNow().reasonStyle || '') })
+      return sendJson(res, 200, {
+        ok: true,
+        presets: { ...BUILTIN_STYLES, ...(overrides.stylePresets || {}) },
+        builtin: Object.keys(BUILTIN_STYLES),
+        current: String(cfgNow().reasonStyle || ''),
+      })
     }
 
     if (req.method === 'POST' && p === '/style') {
       const body = await readBody(req)
       const action = String(body?.action || 'save')
       const name = String(body?.name || '').trim().slice(0, 40)
-      const presets = { ...(overrides.stylePresets || {}) }
+      const presets = { ...BUILTIN_STYLES, ...(overrides.stylePresets || {}) }
 
       if (action === 'save' || action === 'import') {
         if (!name) return sendJson(res, 400, { ok: false, error: '预设得有个名字' })
         const text = String(body?.text || '').trim()
         if (!text) return sendJson(res, 400, { ok: false, error: '内容不能为空' })
         if (text.length > 8000) return sendJson(res, 400, { ok: false, error: '太长了（上限 8000 字）' })
-        presets[name] = text
-        overrides = { ...overrides, stylePresets: presets }
+        const own = { ...(overrides.stylePresets || {}), [name]: text }
+        overrides = { ...overrides, stylePresets: own }
         try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 下一句会报 */ }
         logInfo(action === 'import' ? 'style:import' : 'style:save', `${name}（${text.length} 字）`)
-        return sendJson(res, 200, { ok: true, presets })
+        return sendJson(res, 200, { ok: true, presets: { ...BUILTIN_STYLES, ...own } })
       }
 
       if (action === 'apply') {
@@ -517,10 +575,12 @@ export function apply(ctx, config) {
       }
 
       if (action === 'delete') {
-        delete presets[name]
-        overrides = { ...overrides, stylePresets: presets }
+        if (BUILTIN_STYLES[name]) return sendJson(res, 400, { ok: false, error: `「${name}」是自带的，删不掉；想改就另存一个名字` })
+        const own = { ...(overrides.stylePresets || {}) }
+        delete own[name]
+        overrides = { ...overrides, stylePresets: own }
         try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 同上 */ }
-        return sendJson(res, 200, { ok: true, presets })
+        return sendJson(res, 200, { ok: true, presets: { ...BUILTIN_STYLES, ...own } })
       }
 
       return sendJson(res, 400, { ok: false, error: `不认识的动作：${action}` })
@@ -761,6 +821,9 @@ export function apply(ctx, config) {
     }
 
     if (req.method === 'GET' && p === '/explain') {
+      if (cfgNow().explainOn === false) {
+        return sendJson(res, 200, { ok: false, error: '设置里关掉了「点开时展开更长的理由」' })
+      }
       const force = url.searchParams.get('force') === '1'
       const bvid = url.searchParams.get('bvid')
       if (bvid) {

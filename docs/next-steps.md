@@ -50,11 +50,14 @@
 - 无字幕时降级：`description` + 前 20 条热评
 - 成本：约 ¥0.01 / 次
 
-## 5. 赞 / 踩
+## 5. 赞 / 踩 ✅（2026-10-21 完成）
 
 - `feedback.jsonl`：`{ts, bvid, action:'like'|'dislike', axis, sub, tags}`
 - 路由 `POST /api/bili-jar/feedback`，卡片上加 👍 / 👎
-- 学的地方：`scoreItem` 里给「同 tag / 同 sub」加减分（贝叶斯平滑，先只记不用，攒 20 条再启用）
+- 学习方式：`lib/pool.mjs` 的 `affinityDelta()` —— 赞过的 UP +0.04/次（封顶 +0.10），
+  踩过的 -0.07/次（封顶 -0.16），tag 命中 ±0.004~0.006/次（封顶 ±0.05），
+  总增量夹在 [-0.2, +0.12]。**攒够 20 条才启用**（`FEEDBACK_MIN`）。
+- 单测：`node tools/affinity-check.mjs`
 - 红线：**只记本地，绝不落到 B站 账号**
 
 ## 6. 稍后看落库
@@ -72,10 +75,10 @@ README 加一节「Assets」，写明出处与许可；或在仓库放 `NOTICE`�
 
 ## 验收总清单
 
-- [ ] 换一批后 `/log` 能看到完整链路
-- [ ] `contentSource` 三档切换生效，`scroll` 模式下报告缺失不报错
-- [ ] `useScrollLogin` 关闭时**不读**凭证文件
-- [ ] 理由里不出现任何数字
-- [ ] 赞/踩写入 `feedback.jsonl`，且不影响 B站 账号
-- [ ] 稍后看在换浏览器后仍在
-- [ ] README 有 Assets 归属
+- [x] 换一批后 `/log` 能看到完整链路
+- [x] `contentSource` 三档切换生效，`scroll` 模式下报告缺失不报错
+- [x] `useScrollLogin` 关闭时**不读**凭证文件
+- [x] 理由里不出现任何数字
+- [x] 赞/踩写入 `feedback.jsonl`，且不影响 B站 账号（攒够 20 条开始参与打分）
+- [x] 稍后看在换浏览器后仍在
+- [x] README 有 Assets 归属
