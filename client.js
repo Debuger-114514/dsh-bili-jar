@@ -789,6 +789,29 @@
             } catch { d = null }
             treeBox.textContent = ''
             if (!d || !d.ok) { treeMsg.textContent = '读不到轴树'; return }
+
+            // 出厂就有的分区：点一下直接加进兴趣轴（名字不用自己想）
+            const have = new Set(cfgDraft.axes || [])
+            const spare = (d.presets || []).filter((n) => !have.has(n)).slice(0, 14)
+            if (spare.length) {
+              const box2 = el('div', 'ced')
+              box2.appendChild(el('div', 'tip', '内置分区（点一下加进兴趣轴，带现成的子簇）'))
+              const chips2 = el('div', 'chips2')
+              for (const name of spare) {
+                const b = el('button', 'save', '＋ ' + name)
+                b.type = 'button'
+                b.onclick = async () => {
+                  const axes = [...(cfgDraft.axes || []), name]
+                  cfgDraft.axes = axes
+                  await saveConfig({ axes })
+                  render()
+                }
+                chips2.appendChild(b)
+              }
+              box2.appendChild(chips2)
+              treeBox.appendChild(box2)
+            }
+
             for (const ax of (cfgDraft.axes || [])) {
               const node = (d.nodes && d.nodes[ax]) || { subs: [] }
               const line = el('div', 'ced')

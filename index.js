@@ -17,7 +17,7 @@ import { homedir } from 'node:os'
 import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
 import { buildPool, toCard, axisSim } from './lib/pool.mjs'
-import { AXIS_TREE, setUserTree, getUserTree, nodeFor, suggestSubs } from './lib/tree.mjs'
+import { AXIS_TREE, AXIS_BASE, setUserTree, getUserTree, nodeFor, suggestSubs } from './lib/tree.mjs'
 import { reviewClusters } from './lib/tree-review.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage, migrateUsage } from './lib/usage.mjs'
@@ -563,7 +563,7 @@ export function apply(ctx, config) {
           subs: (n.subs || []).map((s) => ({ name: s.name, terms: s.terms || [], mine: mine.has(s.name) })),
         }
       }
-      return sendJson(res, 200, { ok: true, nodes })
+      return sendJson(res, 200, { ok: true, nodes, presets: Object.keys(AXIS_BASE) })
     }
 
     if (req.method === 'POST' && p === '/tree') {
