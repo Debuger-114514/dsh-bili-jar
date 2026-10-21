@@ -671,87 +671,6 @@
           box.appendChild(chipEditor('axes', '兴趣轴（回车加，× 删）', '例如 数码'))
           box.appendChild(chipEditor('ups', '固定关注的 UP（UID 或名字）', '例如 江平舟'))
 
-          // ---- 预设：把这一套设置存成一档，以后一键换回来 ----
-          const presetWrap = el('div', 'ced')
-          presetWrap.appendChild(el('div', 'lbl', '预设（存下一整套，以后一键换回）'))
-          const presetRow = el('div', 'row2')
-          const presetSel = el('select', 'sel')
-          const presetApply = el('button', 'save', '应用')
-          presetApply.type = 'button'
-          const presetDel = el('button', 'save', '删除')
-          presetDel.type = 'button'
-          presetRow.append(presetSel, presetApply, presetDel)
-          const presetSaveRow = el('div', 'row2')
-          const presetName = el('input', 'ta1')
-          presetName.placeholder = '名字，例如「我的口味」'
-          const presetSave = el('button', 'save', '存为预设')
-          presetSave.type = 'button'
-          presetSaveRow.append(presetName, presetSave)
-          const presetMsg = el('div', 'tip', '预设不含 API Key —— 换预设不会动你的密钥')
-          presetWrap.append(presetRow, presetSaveRow, presetMsg)
-          box.appendChild(presetWrap)
-
-          const drawPresets = (map) => {
-            presetSel.textContent = ''
-            const names = Object.keys(map || {})
-            if (!names.length) {
-              const o = document.createElement('option')
-              o.textContent = '（还没有预设）'
-              presetSel.appendChild(o)
-              return
-            }
-            for (const n of names) {
-              const o = document.createElement('option')
-              o.value = n
-              o.textContent = n
-              presetSel.appendChild(o)
-            }
-          }
-          const presetApi = async (body) => {
-            const r = await fetch(API + '/preset', {
-              method: 'POST', credentials: 'same-origin',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify(body),
-            })
-            return r.json()
-          }
-          fetch(API + '/preset', { credentials: 'same-origin', cache: 'no-store' })
-            .then((r) => r.json())
-            .then((d) => { if (d.ok) drawPresets(d.presets) })
-            .catch(() => drawPresets({}))
-
-          presetSave.addEventListener('click', async () => {
-            const name = presetName.value.trim()
-            if (!name) { presetMsg.textContent = '先给它起个名字'; return }
-            try {
-              const d = await presetApi({ action: 'save', name })
-              if (!d.ok) { presetMsg.textContent = d.error || '保存失败'; return }
-              drawPresets(d.presets)
-              presetSel.value = name
-              presetName.value = ''
-              presetMsg.textContent = `已存下「${name}」`
-            } catch { presetMsg.textContent = '保存失败' }
-          })
-          presetApply.addEventListener('click', async () => {
-            const name = presetSel.value
-            if (!name) return
-            try {
-              const d = await presetApi({ action: 'apply', name })
-              if (!d.ok) { presetMsg.textContent = d.error || '应用失败'; return }
-              cfgDraft = { ...cfgDraft, ...d.config }
-              presetMsg.textContent = `已切到「${name}」，点「换一批」按它重挑`
-              render()
-            } catch { presetMsg.textContent = '应用失败' }
-          })
-          presetDel.addEventListener('click', async () => {
-            const name = presetSel.value
-            if (!name) return
-            try {
-              const d = await presetApi({ action: 'delete', name })
-              if (d.ok) { drawPresets(d.presets); presetMsg.textContent = `删掉「${name}」` }
-            } catch { presetMsg.textContent = '删除失败' }
-          })
-
           // ---- 头像 ----
           const avWrap = el('div', 'ced')
           avWrap.appendChild(el('div', 'lbl', '头像（推荐理由旁边那只）'))
@@ -900,12 +819,13 @@
           box.appendChild(rowOf('复用「刷B站」的登录（取字幕）', mkSwitch('useScrollLogin')))
           box.appendChild(el('div', 'tip', '⚠️ 会读 bili-scroll 的 B站 登录凭证（只读），两个插件共享同一份登录态。不勾选时绝不会读那个文件。'))
 
-          box.appendChild(el('div', 'lbl', '语言风格'))
+          box.appendChild(el('div', 'lbl', '语言风格（理由按它写，也可以从 .md 导入）'))
           const ta = el('textarea', 'ta')
           ta.rows = 4
           ta.value = cfgDraft.reasonStyle || ''
           ta.placeholder = '例如：像朋友在饭桌上随口推荐，别用感叹号，别写“这条视频”'
           box.appendChild(ta)
+          box.appendChild(el('div', 'tip', '超过 1500 字的部分不会送进模型（每次调用都按它算钱），导入的 .md 一样'))
 
           const save = el('button', 'save', '保存')
           save.type = 'button'
@@ -915,7 +835,122 @@
             save.textContent = ok ? '已保存 ✓' : '保存失败'
             setTimeout(() => { save.textContent = '保存' }, 1600)
           })
-          box.appendChild(save)
+
+          // ---- 语气预设 / 导入 .md ----
+          const styleApi = async (body) => {
+            const r = await fetch(API + '/style', {
+              method: 'POST', credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+            return r.json()
+          }
+          const styleSel = el('select', 'sel')
+          const styleApply = el('button', 'save', '应用')
+          styleApply.type = 'button'
+          const styleDel = el('button', 'save', '删除')
+          styleDel.type = 'button'
+          const styleRow = el('div', 'row2')
+          styleRow.append(styleSel, styleApply, styleDel)
+
+          const styleName = el('input', 'ta1')
+          styleName.placeholder = '预设名字，例如「鲸鱼女仆」'
+          const styleSave = el('button', 'save', '存为预设')
+          styleSave.type = 'button'
+          const styleImport = el('button', 'save', '导入 .md')
+          styleImport.type = 'button'
+          const styleFile = document.createElement('input')
+          styleFile.type = 'file'
+          styleFile.accept = '.md,.markdown,.txt,text/markdown,text/plain'
+          styleFile.style.display = 'none'
+          const styleRow2 = el('div', 'row2')
+          styleRow2.append(styleName, styleSave, styleImport, styleFile)
+
+          const styleMsg = el('div', 'tip', '')
+          const saveRow = el('div', 'row2')
+          saveRow.append(save)
+
+          box.append(styleRow, styleRow2, saveRow, styleMsg)
+
+          const drawStyles = (map) => {
+            styleSel.textContent = ''
+            const names = Object.keys(map || {})
+            if (!names.length) {
+              const o = document.createElement('option')
+              o.textContent = '（还没有语气预设）'
+              styleSel.appendChild(o)
+              return
+            }
+            for (const n of names) {
+              const o = document.createElement('option')
+              o.value = n
+              o.textContent = n
+              styleSel.appendChild(o)
+            }
+          }
+          fetch(API + '/style', { credentials: 'same-origin', cache: 'no-store' })
+            .then((r) => r.json())
+            .then((d) => { if (d.ok) drawStyles(d.presets) })
+            .catch(() => drawStyles({}))
+
+          styleSave.addEventListener('click', async () => {
+            const name = styleName.value.trim()
+            if (!name) { styleMsg.textContent = '先给它起个名字'; return }
+            if (!ta.value.trim()) { styleMsg.textContent = '上面还没写内容'; return }
+            try {
+              const d = await styleApi({ action: 'save', name, text: ta.value })
+              if (!d.ok) { styleMsg.textContent = d.error || '保存失败'; return }
+              drawStyles(d.presets)
+              styleSel.value = name
+              styleName.value = ''
+              styleMsg.textContent = `已存下「${name}」`
+            } catch { styleMsg.textContent = '保存失败' }
+          })
+
+          styleApply.addEventListener('click', async () => {
+            const name = styleSel.value
+            if (!name) return
+            try {
+              const d = await styleApi({ action: 'apply', name })
+              if (!d.ok) { styleMsg.textContent = d.error || '应用失败'; return }
+              ta.value = d.text || ''
+              cfgDraft.reasonStyle = ta.value
+              drawStyles(d.presets)
+              styleSel.value = name
+              styleMsg.textContent = `已切到「${name}」，新的理由会按它写`
+            } catch { styleMsg.textContent = '应用失败' }
+          })
+
+          styleDel.addEventListener('click', async () => {
+            const name = styleSel.value
+            if (!name) return
+            try {
+              const d = await styleApi({ action: 'delete', name })
+              if (d.ok) { drawStyles(d.presets); styleMsg.textContent = `删掉「${name}」` }
+            } catch { styleMsg.textContent = '删除失败' }
+          })
+
+          styleImport.addEventListener('click', () => styleFile.click())
+          styleFile.addEventListener('change', () => {
+            const f = styleFile.files && styleFile.files[0]
+            if (!f) return
+            if (f.size > 512 * 1024) { styleMsg.textContent = '文件太大了（上限 512 KB）'; return }
+            const reader = new FileReader()
+            reader.onload = async () => {
+              const text = String(reader.result || '').trim()
+              if (!text) { styleMsg.textContent = '这个文件是空的'; return }
+              const name = (f.name || '导入的风格').replace(/\.(md|markdown|txt)$/i, '').slice(0, 40)
+              ta.value = text
+              cfgDraft.reasonStyle = text
+              try {
+                const d = await styleApi({ action: 'import', name, text })
+                if (d.ok) { drawStyles(d.presets); styleSel.value = name }
+                await saveConfig({ reasonStyle: text })
+                styleMsg.textContent = `已导入「${name}」· ${text.length} 字，并保存`
+              } catch { styleMsg.textContent = '导入失败' }
+            }
+            reader.readAsText(f, 'utf-8')
+          })
 
           if (cfgDraft.usage) {
             const u = cfgDraft.usage

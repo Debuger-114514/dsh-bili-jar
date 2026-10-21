@@ -471,48 +471,42 @@ export function apply(ctx, config) {
       return sendJson(res, 200, { ok: true, config: cfgNow(), overrides })
     }
 
-    /* ── 预设：把现在这套设置存下来，以后一键换回来 ──────────────────────
-     * 存在 config.json 的 `presets` 里。刻意**不含 apiKey**：预设是"口味"，
-     * 不该连密钥一起到处抄。 */
-    if (req.method === 'GET' && p === '/preset') {
-      return sendJson(res, 200, { ok: true, presets: overrides.presets || {}, current: cfgNow() })
+    /* ── 语气预设：存的是"说话什么样"，不是整套配置 ──────────────────
+     * 存在 config.json 的 `stylePresets`（名字 → 风格正文）。
+     * 前端「导入 .md」读出来的文字也走这里，一键落成预设。 */
+    if (req.method === 'GET' && p === '/style') {
+      return sendJson(res, 200, { ok: true, presets: overrides.stylePresets || {}, current: String(cfgNow().reasonStyle || '') })
     }
 
-    if (req.method === 'POST' && p === '/preset') {
+    if (req.method === 'POST' && p === '/style') {
       const body = await readBody(req)
       const action = String(body?.action || 'save')
-      const name = String(body?.name || '').trim().slice(0, 24)
-      const presets = { ...(overrides.presets || {}) }
+      const name = String(body?.name || '').trim().slice(0, 40)
+      const presets = { ...(overrides.stylePresets || {}) }
 
-      if (action === 'save') {
+      if (action === 'save' || action === 'import') {
         if (!name) return sendJson(res, 400, { ok: false, error: '预设得有个名字' })
-        const c = cfgNow()
-        presets[name] = {
-          axes: c.axes, ups: c.ups,
-          fanMin: c.fanMin, fanMax: c.fanMax,
-          minMinutes: c.minMinutes, maxMinutes: c.maxMinutes, minPlay: c.minPlay,
-          mainCount: c.mainCount, showCharging: c.showCharging,
-          curatorOn: c.curatorOn, explainOn: c.explainOn,
-          reasonStyle: c.reasonStyle, apiModel: c.apiModel, contentSource: c.contentSource,
-        }
-        overrides = { ...overrides, presets }
-        try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 落盘失败下一句会报 */ }
-        logInfo('preset:save', `${name}（${presets[name].axes.join('/')}）`)
+        const text = String(body?.text || '').trim()
+        if (!text) return sendJson(res, 400, { ok: false, error: '内容不能为空' })
+        if (text.length > 8000) return sendJson(res, 400, { ok: false, error: '太长了（上限 8000 字）' })
+        presets[name] = text
+        overrides = { ...overrides, stylePresets: presets }
+        try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 下一句会报 */ }
+        logInfo(action === 'import' ? 'style:import' : 'style:save', `${name}（${text.length} 字）`)
         return sendJson(res, 200, { ok: true, presets })
       }
 
       if (action === 'apply') {
-        const pv = presets[name]
-        if (!pv) return sendJson(res, 404, { ok: false, error: `没有这个预设：${name}` })
-        overrides = { ...overrides, ...pv, presets }
+        if (!presets[name]) return sendJson(res, 404, { ok: false, error: `没有这个预设：${name}` })
+        overrides = { ...overrides, reasonStyle: presets[name] }
         try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 同上 */ }
-        logInfo('preset:apply', name)
-        return sendJson(res, 200, { ok: true, presets, config: cfgNow() })
+        logInfo('style:apply', name)
+        return sendJson(res, 200, { ok: true, presets, text: presets[name] })
       }
 
       if (action === 'delete') {
         delete presets[name]
-        overrides = { ...overrides, presets }
+        overrides = { ...overrides, stylePresets: presets }
         try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 同上 */ }
         return sendJson(res, 200, { ok: true, presets })
       }
@@ -737,7 +731,7 @@ export function apply(ctx, config) {
           '你在替一个人解释「为什么把这条视频挑给他」。',
           '写 100–160 字的一段话：它讲了什么、对你有什么价值、适合什么时候看、有什么坑要提醒。',
           '具体、不吹、不用感叹号；不要复述标题；不要用「这条视频」开头。',
-          style ? `语气与风格：${style}` : '语气与风格：像一个了解他口味的朋友。',
+          style ? `语气与风格：${String(style).slice(0, 1500)}` : '语气与风格：像一个了解他口味的朋友。',
         ].join('\n')
         const user = [
           `标题：${item.title}`,
