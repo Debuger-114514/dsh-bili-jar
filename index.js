@@ -514,6 +514,19 @@ export function apply(ctx, config) {
       return sendJson(res, 400, { ok: false, error: `不认识的动作：${action}` })
     }
 
+    /* ── 插画（豆包画的那三张）───────────────────────────────────────── */
+    if (req.method === 'GET' && p === '/art') {
+      const f = String(url.searchParams.get('f') || 'closed')
+      const map = { closed: 'jar-closed.png', active: 'jar-active.png', face: 'face.png' }
+      const file = map[f]
+      if (!file) return sendJson(res, 404, { ok: false, error: '没有这张图' })
+      try {
+        const buf = readFileSync(join(PLUGIN_DIR, 'assets', file))
+        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' })
+        return res.end(buf)
+      } catch (e) { return sendJson(res, 404, { ok: false, error: String(e?.message ?? e) }) }
+    }
+
     /* ── 头像：换成自己的 ──────────────────────────────────────────────── */
     if (req.method === 'POST' && p === '/avatar') {
       const body = await readBody(req)
