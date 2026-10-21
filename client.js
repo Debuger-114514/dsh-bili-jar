@@ -27,6 +27,8 @@
 
       let hostEl = null
       let cleanup = null
+      /** LLM 写的推荐理由：bvid → 一句话 */
+      const reasonsMap = {}
 
       const CSS = `
 :host{all:initial;}
@@ -68,6 +70,9 @@
 .item a.tt:hover{color:#93c5fd;text-decoration:underline;}
 .item .meta{margin-top:4px;font-size:11px;color:#6b7280;}
 .item .why{margin-top:5px;font-size:11px;line-height:16px;color:#8b949e;}
+.item .why2{margin-top:5px;font-size:11.5px;line-height:17px;color:#c8d3e0;}
+.item .why2::before{content:'“';color:#93c5fd;}
+.item .why2::after{content:'”';color:#93c5fd;}
 .item .chips{margin-top:5px;display:flex;flex-wrap:wrap;gap:4px;}
 .item .chips span{font-size:10px;padding:1px 6px;border-radius:5px;background:rgba(255,255,255,.06);color:#9aa0a6;}
 .item .acts{margin-top:7px;display:flex;gap:6px;}
@@ -296,6 +301,7 @@
           const p = it.pct || {}
           const rate = (p.like != null) ? ` · 赞${p.like}% 币${p.coin}% 藏${p.fav}%` : ''
           box.appendChild(el('div', 'meta', `${it.author || ''} · ${fmtPlay(it.play)}播放 · ${fmtAgo(it.pubdate)}${rate}`))
+          if (reasonsMap[it.bvid]) box.appendChild(el('div', 'why2', reasonsMap[it.bvid]))
 
           if (it.reasons?.length) box.appendChild(el('div', 'why', it.reasons.join(' · ')))
 
@@ -367,6 +373,7 @@
             badge.hidden = n === 0
             const when = data.ts ? new Date(data.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
             tsEl.textContent = data.cached ? `${when} 的库存` : `刚装好 · ${Math.round((data.tookMs || 0) / 1000)}s`
+            loadReasons()
           } catch (e) {
             feed = null
             tsEl.textContent = '失败'
@@ -381,6 +388,20 @@
         }
 
         render()
+
+        /** 让宿主用模型写推荐理由（按需 + 服务端缓存） */
+        async function loadReasons() {
+          try {
+            const res = await fetch(API + '/explain', { credentials: 'same-origin', cache: 'no-store' })
+            const data = await res.json()
+            if (!data?.ok || !data.reasons) return
+            let added = 0
+            for (const [bvid, text] of Object.entries(data.reasons)) {
+              if (text && reasonsMap[bvid] !== text) { reasonsMap[bvid] = text; added += 1 }
+            }
+            if (added) render()
+          } catch { /* 写不出理由不影响片单 */ }
+        }
 
         return () => {
           window.removeEventListener('resize', onResize)

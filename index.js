@@ -3,6 +3,7 @@
  * ============================================================================
  * 阶段 0：挂上、开路由、读配置
  * 阶段 2：/feed —— 累积池 + 打分 + 片单 + 「换一批」
+ * 阶段 3：/explain —— 用宿主自己的 LLM 写「推荐理由」（按需 + 缓存在本地）
  *
  * ⚠️ `apply(ctx, config)` 里拿到的 `config` 不是解析后的值（每个字段都是 `{}`），
  *    真实值必须走 `ctx.settings.describe()` 的 `value` 层。
@@ -15,6 +16,7 @@ import { homedir } from 'node:os'
 import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
 import { buildPool } from './lib/pool.mjs'
+import { writeReason, loadReasonCache, saveReasonCache } from './lib/reasons.mjs'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const { z, notes: hostNotes } = await loadHostDeps()
@@ -32,6 +34,8 @@ const DEFAULTS = {
   minPlay: 10000,
   mainCount: 5,
   showCharging: false,
+  explainOn: true,
+  reasonStyle: '',
 }
 
 /**
@@ -50,6 +54,10 @@ export const Config = !z ? undefined : z.object({
   minPlay: z.natural().default(10000).extra('volatile', true),
   mainCount: z.natural().default(5).extra('volatile', true),
   showCharging: z.boolean().default(false).extra('volatile', true),
+  /** 打开后，罐子里每条会多一行「推荐理由」（用宿主模型写，按需 + 缓存） */
+  explainOn: z.boolean().default(true).extra('volatile', true),
+  /** 推荐理由的语气与风格，写什么就按什么来 */
+  reasonStyle: z.string().default('').extra('volatile', true),
 })
 
 const FEED_TTL = 30 * 60 * 1000
@@ -70,6 +78,11 @@ function toNum(v, d) {
 
 function toBool(v) {
   return unwrap(v) === true
+}
+
+function toStr(v) {
+  const x = unwrap(v)
+  return typeof x === 'string' ? x : ''
 }
 
 function stateDirOf(ctx) {
@@ -109,6 +122,7 @@ export function apply(ctx, config) {
   const feedFile = join(stateDir, 'feed.json')
   const poolFile = join(stateDir, 'pool.json')
   const shownFile = join(stateDir, 'shown.json')
+  const reasonsFile = join(stateDir, 'reasons.json')
   const version = (() => {
     try { return String(JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8')).version || '') } catch { return '' }
   })()
@@ -120,9 +134,10 @@ export function apply(ctx, config) {
     return j && j.ts ? j : null
   })()
   let prevPool = readJson(poolFile, [])
-  /** 上一批给出去的 bvid —— "换一批"就是排除它们 */
   let lastShown = readJson(shownFile, [])
+  let reasons = loadReasonCache(reasonsFile)
   let building = null
+  let explaining = null
 
   let rowCache = { at: 0, row: null }
   function settingsRow(fresh = false) {
@@ -152,6 +167,8 @@ export function apply(ctx, config) {
       minPlay: toNum(c.minPlay, 10000),
       mainCount: toNum(c.mainCount, 5),
       showCharging: toBool(c.showCharging),
+      explainOn: c.explainOn === undefined ? true : toBool(c.explainOn),
+      reasonStyle: toStr(c.reasonStyle),
     }
   }
 
@@ -162,7 +179,6 @@ export function apply(ctx, config) {
     building = (async () => {
       try {
         const t0 = Date.now()
-        // 「换一批」：排除上一批已经给过的
         const exclude = force ? lastShown : []
         const r = await buildPool({ ...cfgNow(), exclude }, (m) => log(m), prevPool)
         const out = { ...r, tookMs: Date.now() - t0, cached: false, excluded: exclude.length }
@@ -184,6 +200,31 @@ export function apply(ctx, config) {
       }
     })()
     return building
+  }
+
+  /** 给当前这批生成「推荐理由」；已经写过的直接复用 */
+  async function getReasons(force) {
+    if (explaining) return explaining
+    explaining = (async () => {
+      const cfg = cfgNow()
+      const items = feedCache?.main || []
+      const out = {}
+      let generated = 0
+      for (const it of items) {
+        const hit = reasons[it.bvid]
+        if (hit?.text && !force) { out[it.bvid] = hit.text; continue }
+        if (generated >= 6) break
+        const text = await writeReason(ctx, it, cfg.reasonStyle)
+        if (text) {
+          reasons[it.bvid] = { text, at: Date.now() }
+          out[it.bvid] = text
+          generated += 1
+        }
+      }
+      if (generated) saveReasonCache(reasonsFile, reasons)
+      return { ok: true, reasons: out, generated, style: cfg.reasonStyle }
+    })().finally(() => { explaining = null })
+    return explaining
   }
 
   const handle = async (req, res, url) => {
@@ -217,12 +258,19 @@ export function apply(ctx, config) {
         rowsCount: Array.isArray(rows) ? rows.length : rows,
         cfg: cfgNow(),
         poolSize: prevPool.length,
+        llm: Boolean(ctx.llm || ctx.get?.('llm')),
       })
     }
 
     if (req.method === 'GET' && p === '/feed') {
       const force = url.searchParams.get('refresh') === '1'
       const r = await getFeed(force)
+      return sendJson(res, 200, r)
+    }
+
+    if (req.method === 'GET' && p === '/explain') {
+      const force = url.searchParams.get('force') === '1'
+      const r = await getReasons(force)
       return sendJson(res, 200, r)
     }
 
