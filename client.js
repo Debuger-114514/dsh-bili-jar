@@ -240,8 +240,12 @@
         const ft = el('div', 'ft')
         const refresh = el('button', null, '换一批')
         refresh.type = 'button'
+        // 不重新搜，直接从上一个池子里再捞几条（理由优先用磁盘上存过的）
+        const moreBtn = el('button', null, '更多电子榨菜')
+        moreBtn.type = 'button'
+        moreBtn.title = '不重新抓取，从上一轮的池子里再捞几条'
         const tsEl = el('span', 'ts', '')
-        ft.append(refresh, tsEl)
+        ft.append(refresh, moreBtn, tsEl)
 
         panel.append(hd, tabsEl, bd, ft)
 
@@ -334,6 +338,41 @@
         tabCfg.addEventListener('click', () => { setTab('cfg'); loadConfig() })
 
         refresh.addEventListener('click', () => openFeed(true))
+
+        moreBtn.addEventListener('click', async () => {
+          if (loading) return
+          loading = true
+          moreBtn.disabled = true
+          moreBtn.textContent = '翻池子…'
+          try {
+            const res = await fetch(API + '/more', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ n: 3 }),
+              credentials: 'same-origin',
+              cache: 'no-store',
+            })
+            const d = await res.json()
+            if (!res.ok || d.ok === false) {
+              tsEl.textContent = String(d?.error || '没有了').slice(0, 28)
+              setTimeout(() => { tsEl.textContent = '' }, 4000)
+              return
+            }
+            if (d.main) feed = { ...feed, main: d.main }
+            const n = (d.main || []).length
+            badge.textContent = String(n)
+            badge.hidden = n === 0
+            tsEl.textContent = `又捞了 ${d.added?.length || 0} 条 · 池里还剩 ${d.left ?? '?'}`
+            setTab('main')
+          } catch {
+            tsEl.textContent = '翻池子失败'
+          } finally {
+            loading = false
+            moreBtn.disabled = false
+            moreBtn.textContent = '更多电子榨菜'
+            if (panel.hidden === false) render()
+          }
+        })
 
         function msg(text) {
           const d = el('div', 'msg')

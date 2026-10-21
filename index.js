@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
-import { buildPool } from './lib/pool.mjs'
+import { buildPool, toCard } from './lib/pool.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage, migrateUsage } from './lib/usage.mjs'
 import { writeStateDoc } from './lib/statefile.mjs'
@@ -564,6 +564,67 @@ export function apply(ctx, config) {
       const force = url.searchParams.get('refresh') === '1'
       const r = await getFeed(force)
       return sendJson(res, 200, r)
+    }
+
+    /**
+     * 「更多电子榨菜」：**不重新搜**，直接从上一轮留下的池子里再捞几条。
+     * 理由先查磁盘缓存（reasons.json），查不到才叫模型 —— 所以关掉再打开、
+     * 点这个按钮，上次写过的推荐语还能接着用，不用重花钱。
+     */
+    if (req.method === 'POST' && p === '/more') {
+      const body = await readBody(req)
+      const n = Math.min(5, Math.max(1, Number(body?.n) || 3))
+      const f = feedCache
+      if (!f || !Array.isArray(f.main) || !f.main.length) return sendJson(res, 200, { ok: false, error: '还没有片单，先刷一批' })
+      if (f.main.length >= 30) return sendJson(res, 200, { ok: false, error: '已经 30 条了，先看一阵子吧；想换就点「换一批」' })
+
+      const have = new Set(f.main.map((x) => x.bvid))
+      // 先决赛圈（本来就是按分数排好的），再整个池子 —— 池子没分数，按互动率排
+      const rateOf = (x) => (x.pct?.coin || 0) * 2 + (x.pct?.fav || 0) * 2 + (x.pct?.like || 0)
+      const seen = new Set()
+      const take = (x) => {
+        if (!x?.bvid || have.has(x.bvid) || seen.has(x.bvid)) return false
+        seen.add(x.bvid)
+        return true
+      }
+      const queue = [
+        ...(f.shortlist || []).filter(take),
+        ...(f.pool || []).map((x) => toCard(x)).sort((a, b) => rateOf(b) - rateOf(a)).filter(take),
+      ]
+      if (!queue.length) return sendJson(res, 200, { ok: false, error: '池子掏空了 —— 点「换一批」才会去搜新的' })
+
+      const cur = cfgNow()
+      const batch = queue.slice(0, n)
+      const whyOf = new Map()
+      const need = []
+      for (const it of batch) {
+        const cached = reasons[it.bvid]?.text
+        if (cached) whyOf.set(it.bvid, cached)
+        else need.push(it)
+      }
+
+      let note = ''
+      if (need.length && cur.curatorOn) {
+        const c = await curate(ctx, need, cur.reasonStyle, {
+          pick: need.length,
+          api: { base: cur.apiBase, key: cur.apiKey, model: cur.apiModel },
+          kind: 'more',
+        })
+        if (c.ok) {
+          for (const pk of c.picks) { whyOf.set(pk.bvid, pk.why); reasons[pk.bvid] = { text: pk.why, at: Date.now() } }
+          saveReasonCache(reasonsFile, reasons)
+        } else note = String(c.note || '模型没写成')
+      }
+
+      const added = batch.filter((it) => whyOf.has(it.bvid)).map((it) => ({ ...it, why: whyOf.get(it.bvid), more: true }))
+      if (!added.length) return sendJson(res, 200, { ok: false, error: note || '这几位都没写出理由，先不塞给你' })
+
+      const main = [...f.main, ...added]
+      feedCache = { ...f, main, moreCount: (f.moreCount || 0) + added.length }
+      try { writeFileSync(feedFile, JSON.stringify(feedCache), 'utf8') } catch { /* 无所谓 */ }
+      refreshStateDoc()
+      logInfo('more:add', `${added.length} 条 / 池里还剩 ${queue.length - added.length}`)
+      return sendJson(res, 200, { ok: true, main, added, left: queue.length - added.length, note })
     }
 
     // 桌宠头像：默认是蓝发鲸鱼女仆（来自 dsh-whale-widget，MIT）
