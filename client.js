@@ -73,6 +73,10 @@
 .item .why2{margin-top:5px;font-size:11.5px;line-height:17px;color:#c8d3e0;}
 .item .why2::before{content:'“';color:#93c5fd;}
 .item .why2::after{content:'”';color:#93c5fd;}
+.item .whyRow{display:flex;gap:6px;align-items:flex-start;margin-top:6px;}
+.pet{width:20px;height:20px;flex:none;cursor:pointer;transition:transform .15s ease;}
+.pet:hover{transform:scale(1.1);}
+.pet svg{width:100%;height:100%;display:block;}
 .item .chips{margin-top:5px;display:flex;flex-wrap:wrap;gap:4px;}
 .item .chips span{font-size:10px;padding:1px 6px;border-radius:5px;background:rgba(255,255,255,.06);color:#9aa0a6;}
 .item .acts{margin-top:7px;display:flex;gap:6px;}
@@ -113,6 +117,16 @@
 .av{width:18px;height:18px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;
   font-size:10px;font-weight:700;color:#0b1220;background:#93c5fd;margin-right:5px;vertical-align:-3px;}
 `
+
+      /** 桌宠头像：罐子本人。点它 = 让它多说两句 */
+      const PET_SVG = `
+<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <rect x="11" y="3.5" width="10" height="3" rx="1.2" fill="#e7b563"/>
+  <rect x="7" y="6.5" width="18" height="21" rx="5" fill="#9fd0c0" stroke="#5f9c8a" stroke-width="1.2"/>
+  <circle cx="13" cy="16" r="1.7" fill="#0f172a"/>
+  <circle cx="19.5" cy="16" r="1.7" fill="#0f172a"/>
+  <path d="M12.5 20.5c1.8 1.8 5.2 1.8 7 0" stroke="#0f172a" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+</svg>`
 
       const JAR_SVG = `
 <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -326,17 +340,20 @@
 
           const p = it.pct || {}
           const rate = (p.like != null) ? ` · 赞${p.like}% 币${p.coin}% 藏${p.fav}%` : ''
-          const meta = el('div', 'meta')
-          meta.appendChild(el('span', 'av', String(it.author || '?').slice(0, 1)))
-          meta.appendChild(document.createTextNode(`${it.author || ''} · ${fmtPlay(it.play)}播放 · ${fmtAgo(it.pubdate)}${rate}`))
-          box.appendChild(meta)
+          box.appendChild(el('div', 'meta', `${it.author || ''} · ${fmtPlay(it.play)}播放 · ${fmtAgo(it.pubdate)}${rate}`))
 
           const whyText = it.why || reasonsMap[it.bvid]
           if (whyText) {
+            const row = el('div', 'whyRow')
+            const pet = el('span', 'pet')
+            pet.innerHTML = PET_SVG
+            pet.title = '点我看更长的推荐理由'
+            row.appendChild(pet)
+
             const w = el('div', 'why2', whyText)
             w.title = '点开看更长的理由'
             w.style.cursor = 'pointer'
-            w.addEventListener('click', async () => {
+            const expand = async () => {
               if (w.dataset.open) { w.textContent = whyText; delete w.dataset.open; return }
               w.textContent = whyText + ' …'
               try {
@@ -345,8 +362,11 @@
                 if (d.ok && d.long) { w.textContent = whyText + ' ｜ ' + d.long; w.dataset.open = '1' }
                 else w.textContent = whyText
               } catch { w.textContent = whyText }
-            })
-            box.appendChild(w)
+            }
+            pet.addEventListener('click', expand)
+            w.addEventListener('click', expand)
+            row.appendChild(w)
+            box.appendChild(row)
           }
 
           if (it.reasons?.length) box.appendChild(el('div', 'why', it.reasons.join(' · ')))
