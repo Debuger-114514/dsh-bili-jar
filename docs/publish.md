@@ -101,36 +101,41 @@ npm 不允许覆盖已发布的版本号，忘了改会直接 403。
 
 ## 二、上架插件市场（dshmarket）
 
-**不是往 dshmarket 提 PR。** dshmarket 只是"市场 App"，插件目录来自
-[awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)；市场每次打开都实时读
-`awesome-dsh-plugin.com/plugins.json`，所以那边合并了，这边（通常一天内）就自动出现。
+**不是往 dshmarket 提 PR。** 市场实时读
+[awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的产物；
+那个仓库的**列表是数据驱动的**：`data/plugins/` 下**一个插件一个 yml**，
+两份 README 由脚本生成 —— **改 README 会被 CI 直接判失败**（第一次就是这么被拒的）。
 
-### 步骤
+### 正确做法：只加一个文件
 
-1. **先把包发到 npm**（见上）。目录里带 npm 映射的条目才有一键安装按钮；只有 GitHub 链接的条目照样列出，但装起来要粘贴地址。
-2. **fork 并改 `README.md`**：在合适的分类下加**一行**，格式严格照抄邻居：
+`data/plugins/<owner>__<repo>.yml`（注意是**两个下划线**）：
 
-   ```markdown
-   - [Debuger-114514/dsh-bili-jar](https://github.com/Debuger-114514/dsh-bili-jar) - 一句话说明。
-   ```
+```yaml
+url: https://github.com/Debuger-114514/dsh-bili-jar
+name: Debuger-114514/dsh-bili-jar
+category: fun          # 可选值：agi ui usage theme model identity session memory tools
+                       # wsl browser vision voice docs skill workflow git notify dev
+                       # security remote market fun
+description:
+  en: 'One line ending with a period. Quote it if it contains ": ".'
+  zh: '中文一句，以句号结尾（选填，不写维护者会补）。'
+```
 
-   分类选 **Just for Fun**（那一栏是桌宠、挂件、小游戏）。条目在该分类内按 `owner/repo` 字母序排，
-   所以位置在 `Crosery/...` 与 `Devin-AXIS/...` 之间。
+- `url` 必须和仓库地址完全一致
+- 只有 `description.en` 是必填
+- **不要在 yml 里写 `npm:`**，npm 映射是自动采集的，手写会被拒
+- 提 PR 时**只提交这一个文件**，README 由他们在 main 上重新生成
 
-   备用的一句话（挑一个，别超长）：
+### 别做的事
 
-   > - A jar in the corner of the DSH Web UI that picks what to watch on Bilibili: it searches your own interest axes instead of the platform's feed, ranks by like/coin/favourite rate instead of view count, and has an LLM curate five picks with content-based reasons.
+- 不要手改 `README.md` / `README.zh.md`：CI 有一步「READMEs match data/plugins」，
+  改了就红
+- 不要贪快复制别人的条目再改名字：文件名和 yml 里的 `name` 都要对
 
-3. **开 PR**，标题写 `Add dsh-bili-jar`。评审会**照着源码核对描述**（"46 tools" 就真的去数），
-   所以那一行里别写没做的东西。评审标准：`contributing.md`。
+### CI 大概跑多久
 
-### 被拒/被删的常见原因
-
-- 装不上（`dsh plugin add` 失败）→ 先在干净 profile 上试一遍
-- 描述和实际不符
-- 仓库半年没动、或仓库没了
-
----
+`pr-check.yml` 会装依赖、跑一堆结构检查、再重建整站，**十分钟上下**。
+红了的注释会直接写在 Actions 页面上，通常能读出该改哪个文件。
 
 ## 三、发版检查清单
 
