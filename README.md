@@ -95,6 +95,12 @@
 cd ~/.dsh/profiles/desktop && pnpm install
 ```
 
+装好后也可以从 npm 装（非桌面版）：
+
+```bash
+dsh plugin --profile web add dsh-bili-jar
+```
+
 装完**必须重启 DSH**（bundle 层要重新组装），再刷新页面（客户端 bundle 是页面加载时注入的）。
 
 ## 第一次用要做什么
@@ -145,6 +151,7 @@ B站 登录是可选的：不登也能挑片、能看；登录只是为了取 AI
 | `lib/qr.mjs` | 零依赖 QR 编码器（登录二维码用它画） |
 | `lib/statefile.mjs` | 生成 `STATE.md` |
 | `lib/hostdeps.mjs` | 从宿主树里取 `@deepseek-ai/*`（含桌面版 `app.asar` 路径） |
+| `docs/publish.md` | 发 npm、上架插件市场的步骤 |
 
 ## 工具
 

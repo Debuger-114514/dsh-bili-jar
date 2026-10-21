@@ -4,7 +4,7 @@
 from PIL import Image
 from cutout import cut_image, trim, to_canvas, largest_component
 
-SHEET = 'assets/art/maid-sheet.png'
+SHEET = 'art-source/maid-sheet.png'
 # 上排第 2、3 个人物（原图 1254×1254，坐标按网格量出来的）
 FRAMES = {
     'walk-a': (355, 92, 712, 665),

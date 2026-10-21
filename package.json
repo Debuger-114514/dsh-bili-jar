@@ -53,5 +53,17 @@
         "@deepseek-ai/dsh-client-ui-settings-plugins"
       ]
     }
+  },
+  "author": "Debuger-114514",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Debuger-114514/dsh-bili-jar.git"
+  },
+  "homepage": "https://github.com/Debuger-114514/dsh-bili-jar#readme",
+  "bugs": {
+    "url": "https://github.com/Debuger-114514/dsh-bili-jar/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
