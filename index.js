@@ -300,7 +300,20 @@ export function apply(ctx, config) {
     }
 
     if (req.method === 'GET' && p === '/state') {
-      return sendJson(res, 200, { ok: true, stateDir, config: cfgNow(), overrides, feedTs: feedCache?.ts ?? null, poolSize: prevPool.length, usage: todayUsage(usageFile) })
+      const c = cfgNow()
+      const key = c.apiKey || ''
+      // 🔒 永远不把完整 key 递到浏览器：只给掩码
+      const masked = key ? `sk-••••${key.slice(-4)}` : ''
+      return sendJson(res, 200, {
+        ok: true,
+        stateDir,
+        config: { ...c, apiKey: '' },
+        apiKeySet: Boolean(key),
+        apiKeyMasked: masked,
+        feedTs: feedCache?.ts ?? null,
+        poolSize: prevPool.length,
+        usage: todayUsage(usageFile),
+      })
     }
 
     if (req.method === 'POST' && p === '/config') {
