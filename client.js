@@ -737,6 +737,33 @@
           box.appendChild(rowOf('让模型当策展人', mkSwitch('curatorOn')))
           box.appendChild(rowOf('点开时展开更长的理由', mkSwitch('explainOn')))
 
+          // ---- 数字设置（以前只能改 config.json）----
+          const numRow = (label, key, hint, min) => {
+            const wrap = el('div', 'row2')
+            wrap.appendChild(el('span', 'lbl', label))
+            const inp = el('input', 'ta1')
+            inp.type = 'number'
+            inp.style.width = '76px'
+            inp.style.flex = 'none'
+            inp.value = String(cfgDraft[key] ?? '')
+            inp.min = String(min ?? 0)
+            const save = async () => {
+              const n = Number(inp.value)
+              if (!Number.isFinite(n) || n < (min ?? 0)) { inp.value = String(cfgDraft[key] ?? ''); return }
+              cfgDraft[key] = n
+              await saveConfig({ [key]: n })
+            }
+            inp.addEventListener('change', save)
+            wrap.appendChild(inp)
+            if (hint) wrap.appendChild(el('span', 'tip', hint))
+            return wrap
+          }
+          box.appendChild(numRow('日期窗口（天）', 'maxDays', '0 = 不限', 0))
+          box.appendChild(numRow('最短时长（分）', 'minMinutes', '', 0))
+          box.appendChild(numRow('最长时长（分）', 'maxMinutes', '', 1))
+          box.appendChild(numRow('播放门槛', 'minPlay', '', 0))
+          box.appendChild(numRow('每轮几条', 'mainCount', '', 1))
+
           // ---- 可编辑的词表：兴趣轴 / 固定关注 ----
           const chipEditor = (key, title, placeholder) => {
             const wrap = el('div', 'ced')

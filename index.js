@@ -62,6 +62,8 @@ const DEFAULTS = {
   fanMax: 0,
   minMinutes: 8,
   maxMinutes: 90,
+  /** 只看最近 N 天；0 = 不限日期 */
+  maxDays: 14,
   minPlay: 10000,
   mainCount: 5,
   showCharging: false,
@@ -279,6 +281,7 @@ export function apply(ctx, config) {
       fanMax: toNum(merged.fanMax, 0),
       minMinutes: toNum(merged.minMinutes, 8),
       maxMinutes: toNum(merged.maxMinutes, 90),
+      maxDays: merged.maxDays === undefined ? 14 : toNum(merged.maxDays, 14),
       minPlay: toNum(merged.minPlay, 10000),
       mainCount: toNum(merged.mainCount, 5),
       showCharging: toBool(merged.showCharging),
