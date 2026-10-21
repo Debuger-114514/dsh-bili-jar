@@ -6,7 +6,7 @@
  * 每一关都告诉你是过了还是卡住、卡在哪个词上。
  */
 import { videoDetail, videoTags } from '../lib/bili.mjs'
-import { axisSim, AXIS_RULES, spamScore } from '../lib/pool.mjs'
+import { axisSim, AXIS_TREE, spamScore } from '../lib/pool.mjs'
 
 const CFG = { minMinutes: 8, maxMinutes: 90, minPlay: 10000 }
 
@@ -36,16 +36,17 @@ for (const bvid of process.argv.slice(2)) {
 
   console.log('--- 轴匹配 ---')
   const item = { title: x.title, tags }
+  const hay = String(x.title + ' ' + tags.join(' ')).toLowerCase()
   for (const axis of axes) {
     const r = axisSim(item, axis)
-    const rule = AXIS_RULES[axis]
+    const rule = AXIS_TREE[axis]
+    const groups = rule?.groups || []
     if (r.qualified) {
-      console.log(`  ✅ ${axis}  sim=${r.sim}  命中: ${r.hits.join('、')}`)
+      console.log(`  ✅ ${axis}  sim=${r.sim}${r.sub ? ' · ' + r.sub : ''}  命中: ${r.hits.join('、')}`)
     } else {
-      const miss = (rule?.all || []).map((g, i) => {
-        const hit = g.find((t) => String(x.title + ' ' + tags.join(' ')).toLowerCase().includes(String(t).toLowerCase()))
-        return hit ? null : i
-      }).filter((i) => i !== null)
+      const miss = groups
+        .map((g, i) => (g.some((t) => hay.includes(String(t).toLowerCase())) ? null : i))
+        .filter((i) => i !== null)
       console.log(`  ❌ ${axis}  sim=${r.sim}  命中: ${r.hits.join('、') || '无'}  缺第 ${miss.map((i) => i + 1).join('、')} 组`)
     }
   }
