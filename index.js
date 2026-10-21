@@ -18,7 +18,7 @@ import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
 import { buildPool } from './lib/pool.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
-import { todayUsage } from './lib/usage.mjs'
+import { todayUsage, migrateUsage } from './lib/usage.mjs'
 import { curate } from './lib/curator.mjs'
 import { adoptCookies, videoSubtitle, videoComments, loginStart, loginPoll, hasLogin } from './lib/bili.mjs'
 import { qrDataUrl } from './lib/qr.mjs'
@@ -189,6 +189,11 @@ export function apply(ctx, config) {
   const laterFile = join(stateDir, 'later.json')
   const usageFile = join(stateDir, 'usage.json')
   setUsageFile(usageFile)
+  try {
+    const m = migrateUsage(usageFile)
+    if (m?.dropped) logInfo('usage:migrate', `去掉 ${m.dropped} 条重复的旧汇总，保留 ${m.kept} 条真实记录（备份 ${m.backup}）`)
+    else if (m?.error) logWarn('usage:migrate-fail', m.error)
+  } catch (e) { logWarn('usage:migrate-fail', String(e?.message ?? e)) }
   const version = (() => {
     try { return String(JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8')).version || '') } catch { return '' }
   })()

@@ -660,8 +660,17 @@
             const u = cfgDraft.usage
             const t = u.today || u
             const all = u.total || u
-            box.appendChild(el('div', 'tip', `今天 ${t.calls} 次 · ${t.in + t.out} tok · ¥${t.cost}　累计 ${all.calls} 次 · ¥${all.cost}`))
-            if (u.last) box.appendChild(el('div', 'tip', `最近一次：${u.last.kind} · ${u.last.in}+${u.last.out} tok · ¥${u.last.cost}`))
+            const money = (v) => Number(v || 0).toFixed(4)
+            box.appendChild(el('div', 'tip', `今天 ${t.calls} 次 · ${t.in + t.out} tok · ¥${money(t.cost)}　累计 ${all.calls} 次 · ¥${money(all.cost)}`))
+            // 单价随时段变 —— 不写清楚，数字永远对不上平台
+            const p = u.pricing
+            if (p) {
+              const now = p.period === 'peak' ? '峰时' : '谷时（半价）'
+              box.appendChild(el('div', 'tip', `当前${now}：未命中 ¥${p.unit.cacheMiss}/M · 命中 ¥${p.unit.cacheHit}/M · 输出 ¥${p.unit.output}/M`))
+              if (p.covered === false) box.appendChild(el('div', 'tip', `${p.calendarYear} 年的法定节假日还没收录，按「工作日即峰时」估算`))
+            }
+            if (u.estimated) box.appendChild(el('div', 'tip', '（有几次接口没返回真实用量，按字数估的）'))
+            if (u.last) box.appendChild(el('div', 'tip', `最近一次：${u.last.kind} · ${u.last.in}+${u.last.out} tok · ¥${Number(u.last.cost || 0).toFixed(6)}`))
           }
           const logs = el('div', 'logbox')
           logs.appendChild(el('div', 'lbl', '最近日志'))
