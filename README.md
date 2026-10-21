@@ -67,4 +67,4 @@ node tools/tag-tree.mjs            # 从语料里聚类出 tag 树
 
 ## 许可
 
-MIT
+MIT。图像素材（`assets/avatar.png`）取自 [dsh-whale-widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MIT），详见 [NOTICE](NOTICE)。

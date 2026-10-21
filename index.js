@@ -10,7 +10,7 @@
  *    写到 `~/.dsh/bili-jar/config.json`，优先级最高。
  * ============================================================================
  */
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, appendFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -184,6 +184,8 @@ export function apply(ctx, config) {
   const shownFile = join(stateDir, 'shown.json')
   const reasonsFile = join(stateDir, 'reasons.json')
   const overridesFile = join(stateDir, 'config.json')
+  const feedbackFile = join(stateDir, 'feedback.jsonl')
+  const laterFile = join(stateDir, 'later.json')
   const usageFile = join(stateDir, 'usage.json')
   setUsageFile(usageFile)
   const version = (() => {
@@ -466,6 +468,39 @@ export function apply(ctx, config) {
     if (req.method === 'GET' && p === '/log') {
       const n = Math.min(300, Number(url.searchParams.get('n')) || 100)
       return sendJson(res, 200, { ok: true, file: logFile, lines: logTail(n) })
+    }
+
+    // 赞 / 踩：只记本地，绝不落到 B站 账号
+    if (req.method === 'POST' && p === '/feedback') {
+      const body = await readBody(req)
+      const bvid = String(body?.bvid || '').trim()
+      const action = String(body?.action || '').trim()
+      if (!bvid || !['like', 'dislike'].includes(action)) {
+        return sendJson(res, 400, { ok: false, error: '要 {bvid, action: like|dislike}' })
+      }
+      const item = [...(feedCache?.main || []), ...(feedCache?.up || [])].find((x) => x.bvid === bvid) || {}
+      const row = { ts: Date.now(), bvid, action, axis: item.axis || '', sub: item.sub || '', tags: (item.tags || []).slice(0, 6) }
+      try { appendFileSync(feedbackFile, JSON.stringify(row) + '\n', 'utf8') } catch (e) { logWarn('feedback:write', String(e?.message ?? e)) }
+      logInfo('feedback', `${action} ${bvid}`)
+      return sendJson(res, 200, { ok: true, row })
+    }
+
+    // 稍后看：落盘，不再只存在浏览器
+    if (req.method === 'GET' && p === '/later') {
+      return sendJson(res, 200, { ok: true, items: readJson(laterFile, []) })
+    }
+    if (req.method === 'POST' && p === '/later') {
+      const body = await readBody(req)
+      const bvid = String(body?.bvid || '').trim()
+      if (!bvid) return sendJson(res, 400, { ok: false, error: '要 bvid' })
+      let list = readJson(laterFile, [])
+      if (body.action === 'remove') list = list.filter((x) => x.bvid !== bvid)
+      else if (!list.some((x) => x.bvid === bvid)) {
+        const item = [...(feedCache?.main || []), ...(feedCache?.up || [])].find((x) => x.bvid === bvid) || body.item || { bvid }
+        list = [{ bvid, title: item.title || '', author: item.author || '', durationText: item.durationText || '', url: item.url || `https://www.bilibili.com/video/${bvid}`, addedAt: Date.now() }, ...list].slice(0, 100)
+      }
+      try { writeFileSync(laterFile, JSON.stringify(list), 'utf8') } catch (e) { logWarn('later:write', String(e?.message ?? e)) }
+      return sendJson(res, 200, { ok: true, items: list })
     }
 
     if (req.method === 'GET' && p === '/feed') {

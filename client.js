@@ -399,14 +399,42 @@
 
           const laterBtn = el('button', null, later.some((x) => x.bvid === it.bvid) ? '已在待看' : '稍后看')
           laterBtn.type = 'button'
-          laterBtn.addEventListener('click', () => {
-            const i = later.findIndex((x) => x.bvid === it.bvid)
-            if (i >= 0) later.splice(i, 1)
-            else later.unshift({ ...it, addedAt: Date.now() })
-            saveLater(later)
+          laterBtn.addEventListener('click', async () => {
+            const has = later.some((x) => x.bvid === it.bvid)
+            try {
+              const r = await fetch(API + '/later', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ bvid: it.bvid, action: has ? 'remove' : 'add', item: it }),
+              })
+              const d = await r.json()
+              if (d.ok && Array.isArray(d.items)) later = d.items
+            } catch { /* 后端不在就只本地 */ }
+            if (has) later = later.filter((x) => x.bvid !== it.bvid)
+            else if (!later.some((x) => x.bvid === it.bvid)) later = [{ ...it, addedAt: Date.now() }, ...later]
             setTab(tab === 'later' ? 'later' : tab)
           })
           acts.appendChild(laterBtn)
+
+          for (const [act, label] of [['like', '👍'], ['dislike', '👎']]) {
+            const b = el('button', null, label)
+            b.type = 'button'
+            b.title = act === 'like' ? '喜欢，以后多推这类' : '不喜欢，以后少推'
+            b.addEventListener('click', async () => {
+              try {
+                await fetch(API + '/feedback', {
+                  method: 'POST',
+                  credentials: 'same-origin',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ bvid: it.bvid, action: act }),
+                })
+                b.dataset.on = '1'
+                b.textContent = act === 'like' ? '👍 已记' : '👎 已记'
+              } catch { /* 失败就算了 */ }
+            })
+            acts.appendChild(b)
+          }
 
           box.appendChild(acts)
           return box
@@ -634,6 +662,7 @@
             const when = data.ts ? new Date(data.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
             tsEl.textContent = data.cached ? `${when} 的库存` : `刚装好 · ${Math.round((data.tookMs || 0) / 1000)}s`
             loadReasons()
+            syncLater()
           } catch (e) {
             feed = null
             tsEl.textContent = '失败'
@@ -648,6 +677,15 @@
         }
 
         render()
+
+        /** 从后端同步「待看」（不再只靠 localStorage） */
+        async function syncLater() {
+          try {
+            const res = await fetch(API + '/later', { credentials: 'same-origin', cache: 'no-store' })
+            const d = await res.json()
+            if (d.ok && Array.isArray(d.items)) { later = d.items; if (tab === 'later') render() }
+          } catch { /* 后端不在就用本地那份 */ }
+        }
 
         /** 让宿主用模型写推荐理由（按需 + 服务端缓存） */
         async function loadReasons() {

@@ -1,0 +1,13 @@
+# Notices
+
+## 图像素材
+
+`assets/avatar.png`（右下角挂件与推荐理由前的头像）取自
+**[dsh-whale-widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)**，
+版权所有 (c) MeteorNOX，MIT License。
+
+原文件：`dsh-whale-widget/assets/DSniang1.png`，本仓库未作修改。
+
+MIT License 允许复制、修改、再分发，条件是保留版权声明与许可声明 —— 本文件即为该声明。
+
+如果需要替换成自己的形象，把 `assets/avatar.png` 换掉即可（方块图、建议 512×512 以上，圆形裁切由界面完成）。
