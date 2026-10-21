@@ -119,6 +119,9 @@
 .cfg .add{width:88px;padding:3px 7px;border-radius:6px;font-size:11px;font-family:inherit;color:#e8eaed;
   background:rgba(255,255,255,.05);border:1px dashed rgba(255,255,255,.2);}
 .cfg .add:focus{outline:none;border-color:rgba(59,130,246,.6);border-style:solid;}
+.cfg .logbox{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto;padding:6px;
+  border-radius:8px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.07);}
+.cfg .logline{font-size:10px;line-height:14px;color:#6b7280;font-family:ui-monospace,Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .av{width:18px;height:18px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;
   font-size:10px;font-weight:700;color:#0b1220;background:#93c5fd;margin-right:5px;vertical-align:-3px;}
 `
@@ -539,6 +542,21 @@
             box.appendChild(el('div', 'tip', `今天 ${t.calls} 次 · ${t.in + t.out} tok · ¥${t.cost}　累计 ${all.calls} 次 · ¥${all.cost}`))
             if (u.last) box.appendChild(el('div', 'tip', `最近一次：${u.last.kind} · ${u.last.in}+${u.last.out} tok · ¥${u.last.cost}`))
           }
+          const logs = el('div', 'logbox')
+          logs.appendChild(el('div', 'lbl', '最近日志'))
+          box.appendChild(logs)
+          fetch(API + '/log?n=20', { credentials: 'same-origin', cache: 'no-store' })
+            .then((r) => r.json())
+            .then((d) => {
+              if (!d.ok || !d.lines?.length) { logs.appendChild(el('div', 'logline', '还没有日志')); return }
+              for (const l of d.lines.slice(0, 20)) {
+                const t = new Date(l.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                const det = typeof l.detail === 'string' ? l.detail : JSON.stringify(l.detail || '')
+                logs.appendChild(el('div', 'logline', `${t} ${l.event} ${det}`.slice(0, 130)))
+              }
+            })
+            .catch(() => { logs.appendChild(el('div', 'logline', '日志读不到')) })
+
           box.appendChild(el('div', 'tip', '改完点「换一批」会按新设置重新挑。'))
 
           bd.appendChild(box)

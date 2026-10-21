@@ -20,6 +20,7 @@ import { buildPool } from './lib/pool.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage } from './lib/usage.mjs'
 import { curate } from './lib/curator.mjs'
+import { setLogFile, info as logInfo, warn as logWarn, tail as logTail } from './lib/log.mjs'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const { z, notes: hostNotes } = await loadHostDeps()
@@ -139,9 +140,14 @@ function readBody(req, limit = 64 * 1024) {
 }
 
 export function apply(ctx, config) {
-  const log = (...a) => { try { console.log('[bili-jar]', ...a) } catch { /* 无控制台 */ } }
-
   const stateDir = stateDirOf(ctx)
+  const logFile = join(stateDir, 'bili-jar.log')
+  setLogFile(logFile)
+  const log = (...a) => {
+    try { console.log('[bili-jar]', ...a) } catch { /* 无控制台 */ }
+    try { logInfo('console', a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')) } catch { /* 无所谓 */ }
+  }
+
   const feedFile = join(stateDir, 'feed.json')
   const poolFile = join(stateDir, 'pool.json')
   const shownFile = join(stateDir, 'shown.json')
@@ -215,6 +221,7 @@ export function apply(ctx, config) {
         const cfg = cfgNow()
         const exclude = force ? lastShown : []
         const r = await buildPool({ ...cfg, exclude }, (m) => log(m), prevPool)
+        logInfo('feed:built', JSON.stringify(r.stats || {}))
         const out = { ...r, tookMs: Date.now() - t0, cached: false, excluded: exclude.length }
         feedCache = out
         lastShown = (r.main || []).map((c) => c.bvid)
@@ -236,12 +243,14 @@ export function apply(ctx, config) {
             const byBvid = new Map((r.shortlist || []).map((x) => [x.bvid, x]))
             const curated = c.picks.map((p, i) => ({ ...byBvid.get(p.bvid), why: p.why, rank: i + 1 }))
             feedCache = { ...out, main: curated, curated: true, curatorMs: Date.now() - t1 }
+            logInfo('curate:ok', `${curated.length} 条 / ${Date.now() - t1}ms`)
             for (const p of c.picks) reasons[p.bvid] = { text: p.why, at: Date.now() }
             saveReasonCache(reasonsFile, reasons)
             try { writeFileSync(feedFile, JSON.stringify(feedCache), 'utf8') } catch { /* 无所谓 */ }
             return feedCache
           }
           log(`策展失败，退回规则片单：${c.note}`)
+          logWarn('curate:fail', String(c.note || '未知'))
           feedCache = { ...out, curated: false, curatorNote: c.note }
           return feedCache
         }
@@ -339,6 +348,11 @@ export function apply(ctx, config) {
         llmError: llmError.msg,
         usage: todayUsage(usageFile),
       })
+    }
+
+    if (req.method === 'GET' && p === '/log') {
+      const n = Math.min(300, Number(url.searchParams.get('n')) || 100)
+      return sendJson(res, 200, { ok: true, file: logFile, lines: logTail(n) })
     }
 
     if (req.method === 'GET' && p === '/feed') {
