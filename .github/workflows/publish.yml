@@ -1,0 +1,33 @@
+# 推 v* tag 就发 npm —— 需要仓库里有一个能直接发布的 npm token
+#
+# 仓库里已有的 secret 名字叫 DEEPSEEK_ONLY，下面两个名字都认，
+# 所以不用改名（以后想规范就再加一个叫 NPM_TOKEN 的，优先用那个）。
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write      # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: 自检
+        run: node tools/pack-check.mjs
+      - name: 版本号和 tag 对得上吗
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG=${GITHUB_REF_NAME#v}
+          if [ "$PKG" != "$TAG" ]; then echo "package.json 是 $PKG，tag 是 $TAG"; exit 1; fi
+      - name: 发布
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || secrets.DEEPSEEK_ONLY }}
