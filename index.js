@@ -462,12 +462,17 @@ export function apply(ctx, config) {
     if (req.method === 'GET' && p === '/debug') {
       const safe = (fn, dflt) => { try { return fn() } catch (e) { return `ERR: ${e?.message ?? e}` } }
       let rows = safe(() => ctx.settings?.describe?.() || [], [])
+      // 🔒 调试接口也不许把完整 key 递出去
+      const dcfg = cfgNow()
+      const maskKey = (k) => (k ? `sk-••••${String(k).slice(-4)}` : '')
+      const dOver = { ...overrides }
+      if (dOver.apiKey !== undefined) dOver.apiKey = maskKey(dOver.apiKey)
       return sendJson(res, 200, {
         ok: true,
         rowFound: Boolean(safe(() => settingsRow(true), null)),
         rowsCount: Array.isArray(rows) ? rows.length : String(rows).slice(0, 120),
-        cfg: cfgNow(),
-        overrides,
+        cfg: { ...dcfg, apiKey: maskKey(dcfg.apiKey) },
+        overrides: dOver,
         poolSize: prevPool.length,
         llm: Boolean(safe(() => ctx.llm || ctx.get?.('llm'), null)),
         llmError: llmError.msg,
@@ -576,6 +581,7 @@ export function apply(ctx, config) {
         const hit = reasons[bvid]
         if (hit?.long && !force) return sendJson(res, 200, { ok: true, bvid, long: hit.long, cached: true })
         const style = cfgNow().reasonStyle
+        const c = cfgNow()
         const dur = Math.round((item.duration || 0) / 60)
         const system = [
           '你在替一个人解释「为什么把这条视频挑给他」。',
@@ -595,7 +601,7 @@ export function apply(ctx, config) {
         ].filter(Boolean).join('\n')
         const long = await writeReasonCore(ctx, {
           system, user, maxTokens: 400, timeoutMs: 45000,
-          api: { base: cfg.apiBase, key: cfg.apiKey, model: cfg.apiModel },
+          api: { base: c.apiBase, key: c.apiKey, model: c.apiModel },
         })
         if (long) {
           reasons[bvid] = { ...(reasons[bvid] || {}), long, at: Date.now() }
