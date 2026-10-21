@@ -10,7 +10,7 @@
  *    写到 `~/.dsh/bili-jar/config.json`，优先级最高。
  * ============================================================================
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -44,6 +44,8 @@ const DEFAULTS = {
   apiBase: 'https://api.deepseek.com',
   apiKey: '',
   apiModel: 'deepseek-chat',
+  /** self=只用我们搜的 / scroll=额外读 bili-scroll 的报告 / both=都读 */
+  contentSource: 'self',
 }
 
 /**
@@ -123,8 +125,34 @@ function readJson(file, fallback) {
   try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return fallback }
 }
 
-function readBody(req, limit = 64 * 1024) {
-  return new Promise((resolve) => {
+/**
+ * 读 bili-scroll 的产物（纯只读）：日报里的 `### BV号` + 下一行的标题
+ * 返回 [{bvid, title, source:'scroll'}]，最多 limit 条
+ */
+function readScrollSeeds(limit = 20) {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  const dirs = [join(home, 'bili-duty', 'out'), join(home, 'bili-duty', 'digest')]
+  const out = []
+  for (const dir of dirs) {
+    let files = []
+    try { files = readdirSync(dir).filter((f) => f.endsWith('.md')).sort().reverse().slice(0, 6) } catch { continue }
+    for (const f of files) {
+      let txt = ''
+      try { txt = readFileSync(join(dir, f), 'utf8') } catch { continue }
+      const lines = txt.split('\n')
+      for (let i = 0; i < lines.length; i += 1) {
+        const m = /^###\s*(BV[0-9A-Za-z]{10})/.exec(lines[i])
+        if (!m) continue
+        const next = String(lines[i + 1] || '').replace(/^[\s>*-]+/, '').split('|')[0].split('/')[0].trim()
+        out.push({ bvid: m[1], title: next.slice(0, 80) || `（${m[1]}）`, source: 'scroll' })
+        if (out.length >= limit) return out
+      }
+    }
+  }
+  return out
+}
+
+function readBody(req, limit = 64 * 1024) {  return new Promise((resolve) => {
     let size = 0
     const chunks = []
     req.on('data', (c) => {
@@ -208,6 +236,7 @@ export function apply(ctx, config) {
       apiBase: toStr(merged.apiBase) || DEFAULTS.apiBase,
       apiKey: toStr(merged.apiKey),
       apiModel: toStr(merged.apiModel) || DEFAULTS.apiModel,
+      contentSource: toStr(merged.contentSource) || DEFAULTS.contentSource,
     }
   }
 
@@ -233,14 +262,30 @@ export function apply(ctx, config) {
         try { writeFileSync(feedFile, JSON.stringify(out), 'utf8') } catch (e) { log(`feed 落盘失败：${e?.message ?? e}`) }
 
         // ⭐ 策展人：规则给候选，模型挑 5 条并写理由
-        if (cfg.curatorOn && (r.shortlist || []).length) {
+        // ⭐ 内容源：额外把 bili-scroll 报告里挑过的视频并进候选
+        let shortlist = r.shortlist || []
+        let seeded = 0
+        if (cfg.contentSource === 'scroll' || cfg.contentSource === 'both') {
+          const seeds = readScrollSeeds()
+          const have = new Set(shortlist.map((x) => x.bvid))
+          const add = seeds.filter((s) => !have.has(s.bvid)).map((s) => ({
+            bvid: s.bvid, title: s.title, author: '', duration: 0, pubdate: Math.floor(Date.now() / 1000),
+            play: 0, tags: [], typeName: '', pct: {}, source: 'scroll',
+            reasons: ['来自 bili-scroll 的报告'],
+          }))
+          seeded = add.length
+          shortlist = cfg.contentSource === 'both' ? [...shortlist, ...add] : add.length ? add : shortlist
+          if (seeded) logInfo('seed:scroll', `${seeded} 条 / 模式=${cfg.contentSource}`)
+        }
+
+        if (cfg.curatorOn && shortlist.length) {
           const t1 = Date.now()
-          const c = await curate(ctx, r.shortlist, cfg.reasonStyle, {
+          const c = await curate(ctx, shortlist, cfg.reasonStyle, {
             pick: cfg.mainCount,
             api: { base: cfg.apiBase, key: cfg.apiKey, model: cfg.apiModel },
           })
           if (c.ok) {
-            const byBvid = new Map((r.shortlist || []).map((x) => [x.bvid, x]))
+            const byBvid = new Map(shortlist.map((x) => [x.bvid, x]))
             const curated = c.picks.map((p, i) => ({ ...byBvid.get(p.bvid), why: p.why, rank: i + 1 }))
             feedCache = { ...out, main: curated, curated: true, curatorMs: Date.now() - t1 }
             logInfo('curate:ok', `${curated.length} 条 / ${Date.now() - t1}ms`)

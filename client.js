@@ -107,6 +107,8 @@
 .cfg .ta1{width:100%;box-sizing:border-box;padding:6px 8px;border-radius:7px;font-size:11px;font-family:inherit;
   color:#e8eaed;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);}
 .cfg .ta1:focus{outline:none;border-color:rgba(59,130,246,.6);}
+.cfg .sel{width:100%;box-sizing:border-box;padding:6px 8px;border-radius:7px;font-size:11px;font-family:inherit;
+  color:#e8eaed;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);}
 .cfg .save{align-self:flex-start;font-size:11.5px;padding:5px 14px;border-radius:7px;cursor:pointer;
   font-family:inherit;border:1px solid rgba(59,130,246,.45);background:rgba(59,130,246,.16);color:#93c5fd;}
 .cfg .tip{font-size:10.5px;color:#6b7280;line-height:15px;}
@@ -517,6 +519,27 @@
           box.appendChild(apiRow('API 地址', 'apiBase', 'https://api.deepseek.com'))
           box.appendChild(apiRow('API Key（只存本机）', 'apiKey', 'sk-...'))
           box.appendChild(apiRow('模型', 'apiModel', 'deepseek-chat'))
+
+          // ---- 内容源 ----
+          const csWrap = el('div', 'ced')
+          csWrap.appendChild(el('div', 'lbl', '内容源'))
+          const csSel = el('select', 'sel')
+          for (const [v, label] of [
+            ['self', '只用自己的搜索'],
+            ['scroll', '额外读「刷B站」的报告（只读文件）'],
+            ['both', '两者都要'],
+          ]) {
+            const o = el('option', null, label)
+            o.value = v
+            if ((cfgDraft.contentSource || 'self') === v) o.selected = true
+            csSel.appendChild(o)
+          }
+          csSel.addEventListener('change', async () => {
+            cfgDraft.contentSource = csSel.value
+            await saveConfig({ contentSource: csSel.value })
+          })
+          csWrap.appendChild(csSel)
+          box.appendChild(csWrap)
 
           box.appendChild(el('div', 'lbl', '语言风格'))
           const ta = el('textarea', 'ta')
