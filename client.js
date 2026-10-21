@@ -88,6 +88,19 @@
 .ft button:hover{background:rgba(59,130,246,.26);}
 .ft button[disabled]{opacity:.5;cursor:default;}
 .ft .ts{margin-left:auto;font-size:10.5px;color:#6b7280;}
+.cfg{display:flex;flex-direction:column;gap:9px;padding:4px 2px;}
+.cfg .row2{display:flex;align-items:center;gap:8px;}
+.cfg .lbl{font-size:11.5px;color:#9aa0a6;flex:1;}
+.cfg .sw{flex:none;min-width:44px;height:24px;border-radius:12px;border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.06);color:#9aa0a6;font-size:11px;cursor:pointer;font-family:inherit;}
+.cfg .sw[data-on]{background:rgba(59,130,246,.28);border-color:rgba(59,130,246,.5);color:#bfdbfe;}
+.cfg .ta{width:100%;box-sizing:border-box;padding:8px;border-radius:8px;font-size:11.5px;line-height:17px;
+  font-family:inherit;resize:vertical;color:#e8eaed;background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.12);}
+.cfg .ta:focus{outline:none;border-color:rgba(59,130,246,.6);}
+.cfg .save{align-self:flex-start;font-size:11.5px;padding:5px 14px;border-radius:7px;cursor:pointer;
+  font-family:inherit;border:1px solid rgba(59,130,246,.45);background:rgba(59,130,246,.16);color:#93c5fd;}
+.cfg .tip{font-size:10.5px;color:#6b7280;line-height:15px;}
 `
 
       const JAR_SVG = `
@@ -179,7 +192,8 @@
         const tabMain = el('button', null, '推荐')
         const tabUp = el('button', null, '关注')
         const tabLater = el('button', null, '待看')
-        for (const t of [tabMain, tabUp, tabLater]) { t.type = 'button'; tabsEl.appendChild(t) }
+        const tabCfg = el('button', null, '设置')
+        for (const t of [tabMain, tabUp, tabLater, tabCfg]) { t.type = 'button'; tabsEl.appendChild(t) }
         tabMain.classList.add('on')
 
         const bd = el('div', 'bd')
@@ -269,7 +283,7 @@
 
         const setTab = (t) => {
           tab = t
-          for (const [btn, key] of [[tabMain, 'main'], [tabUp, 'up'], [tabLater, 'later']]) {
+          for (const [btn, key] of [[tabMain, 'main'], [tabUp, 'up'], [tabLater, 'later'], [tabCfg, 'cfg']]) {
             btn.classList.toggle('on', key === t)
           }
           render()
@@ -277,6 +291,7 @@
         tabMain.addEventListener('click', () => setTab('main'))
         tabUp.addEventListener('click', () => setTab('up'))
         tabLater.addEventListener('click', () => setTab('later'))
+        tabCfg.addEventListener('click', () => { setTab('cfg'); loadConfig() })
 
         refresh.addEventListener('click', () => openFeed(true))
 
@@ -301,7 +316,8 @@
           const p = it.pct || {}
           const rate = (p.like != null) ? ` · 赞${p.like}% 币${p.coin}% 藏${p.fav}%` : ''
           box.appendChild(el('div', 'meta', `${it.author || ''} · ${fmtPlay(it.play)}播放 · ${fmtAgo(it.pubdate)}${rate}`))
-          if (reasonsMap[it.bvid]) box.appendChild(el('div', 'why2', reasonsMap[it.bvid]))
+          const whyText = it.why || reasonsMap[it.bvid]
+          if (whyText) box.appendChild(el('div', 'why2', whyText))
 
           if (it.reasons?.length) box.appendChild(el('div', 'why', it.reasons.join(' · ')))
 
@@ -332,9 +348,84 @@
           return box
         }
 
+        // ---- 设置页（DSH 原生设置页看不见这些字段，只能自己做在罐子里）----
+        let cfgDraft = null
+
+        async function loadConfig() {
+          try {
+            const res = await fetch(API + '/state', { credentials: 'same-origin', cache: 'no-store' })
+            const data = await res.json()
+            cfgDraft = { ...(data.config || {}) }
+            if (tab === 'cfg') render()
+          } catch { /* 读不到就空着 */ }
+        }
+
+        async function saveConfig(patch) {
+          try {
+            const res = await fetch(API + '/config', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(patch),
+            })
+            const data = await res.json()
+            if (data.ok) cfgDraft = { ...(data.config || {}) }
+            return Boolean(data.ok)
+          } catch { return false }
+        }
+
+        function renderCfg() {
+          if (!cfgDraft) { msg('读取配置…'); return }
+          const box = el('div', 'cfg')
+
+          const rowOf = (label, node) => {
+            const r = el('div', 'row2')
+            r.appendChild(el('span', 'lbl', label))
+            r.appendChild(node)
+            return r
+          }
+          const mkSwitch = (key) => {
+            const b = el('button', 'sw')
+            b.type = 'button'
+            b.dataset.on = cfgDraft[key] ? '1' : ''
+            b.textContent = cfgDraft[key] ? '开' : '关'
+            b.addEventListener('click', async () => {
+              const next = !cfgDraft[key]
+              cfgDraft[key] = next
+              b.dataset.on = next ? '1' : ''
+              b.textContent = next ? '开' : '关'
+              await saveConfig({ [key]: next })
+            })
+            return b
+          }
+          box.appendChild(rowOf('让模型当策展人', mkSwitch('curatorOn')))
+          box.appendChild(rowOf('给每条写理由', mkSwitch('explainOn')))
+
+          box.appendChild(el('div', 'lbl', '语言风格'))
+          const ta = el('textarea', 'ta')
+          ta.rows = 4
+          ta.value = cfgDraft.reasonStyle || ''
+          ta.placeholder = '例如：像朋友在饭桌上随口推荐，别用感叹号，别写“这条视频”'
+          box.appendChild(ta)
+
+          const save = el('button', 'save', '保存')
+          save.type = 'button'
+          save.addEventListener('click', async () => {
+            save.textContent = '保存中…'
+            const ok = await saveConfig({ reasonStyle: ta.value })
+            save.textContent = ok ? '已保存 ✓' : '保存失败'
+            setTimeout(() => { save.textContent = '保存' }, 1600)
+          })
+          box.appendChild(save)
+          box.appendChild(el('div', 'tip', '改完点「换一批」会按新风格重新挑。'))
+
+          bd.appendChild(box)
+        }
+
         function render() {
           bd.textContent = ''
           if (loading) { msg('正在装罐…（十几秒）'); return }
+          if (tab === 'cfg') { renderCfg(); return }
 
           if (tab === 'later') {
             if (!later.length) { msg('待看是空的。看到感兴趣的但没空看，就点「稍后看」。'); return }

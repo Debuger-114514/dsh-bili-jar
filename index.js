@@ -1,12 +1,13 @@
 /**
  * dsh-bili-jar —— host 半端
  * ============================================================================
- * 阶段 0：挂上、开路由、读配置
- * 阶段 2：/feed —— 累积池 + 打分 + 片单 + 「换一批」
- * 阶段 3：/explain —— 用宿主自己的 LLM 写「推荐理由」（按需 + 缓存在本地）
+ * 规则（pool.mjs）负责把 200 多条压到 20 多条「技术上够格」的候选；
+ * LLM（curator.mjs）负责**挑出 5 条并写理由** —— 也就是"帮你找好看视频"这件事本身。
  *
  * ⚠️ `apply(ctx, config)` 里拿到的 `config` 不是解析后的值（每个字段都是 `{}`），
  *    真实值必须走 `ctx.settings.describe()` 的 `value` 层。
+ * ⚠️ 桌面版的 DSH 原生设置页不显示本插件的字段 ⇒ 配置面板做在罐子里，
+ *    写到 `~/.dsh/bili-jar/config.json`，优先级最高。
  * ============================================================================
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
@@ -17,6 +18,7 @@ import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
 import { buildPool } from './lib/pool.mjs'
 import { writeReason, loadReasonCache, saveReasonCache } from './lib/reasons.mjs'
+import { curate } from './lib/curator.mjs'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const { z, notes: hostNotes } = await loadHostDeps()
@@ -34,13 +36,13 @@ const DEFAULTS = {
   minPlay: 10000,
   mainCount: 5,
   showCharging: false,
+  curatorOn: true,
   explainOn: true,
   reasonStyle: '',
 }
 
 /**
- * ⚠️ 每个字段都要 `.extra('volatile', true)`，否则 DSH 的 settings.update() 会抛
- *    "Plugin entry … has no volatile fields"。
+ * ⚠️ 每个字段都要 `.extra('volatile', true)`，否则 DSH 的 settings.update() 会抛错。
  * ⚠️ 不要加会抛错的校验（.max/.min）：schema 不过 ⇒ entry 被拒收 ⇒ 整条插件不激活。
  */
 export const Config = !z ? undefined : z.object({
@@ -50,13 +52,14 @@ export const Config = !z ? undefined : z.object({
   fanMax: z.natural().default(0).extra('volatile', true),
   minMinutes: z.natural().default(8).extra('volatile', true),
   maxMinutes: z.natural().default(90).extra('volatile', true),
-  /** 播放量下限（0 = 不限） */
   minPlay: z.natural().default(10000).extra('volatile', true),
   mainCount: z.natural().default(5).extra('volatile', true),
   showCharging: z.boolean().default(false).extra('volatile', true),
-  /** 打开后，罐子里每条会多一行「推荐理由」（用宿主模型写，按需 + 缓存） */
+  /** 让模型当策展人：从候选里挑 5 条 + 写理由 */
+  curatorOn: z.boolean().default(true).extra('volatile', true),
+  /** 单独为某条写理由（不开启策展人时也能用） */
   explainOn: z.boolean().default(true).extra('volatile', true),
-  /** 推荐理由的语气与风格，写什么就按什么来 */
+  /** 推荐理由的语气与风格 */
   reasonStyle: z.string().default('').extra('volatile', true),
 })
 
@@ -115,6 +118,22 @@ function readJson(file, fallback) {
   try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return fallback }
 }
 
+function readBody(req, limit = 64 * 1024) {
+  return new Promise((resolve) => {
+    let size = 0
+    const chunks = []
+    req.on('data', (c) => {
+      size += c.length
+      if (size > limit) { resolve(''); req.destroy(); return }
+      chunks.push(c)
+    })
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))) } catch { resolve(null) }
+    })
+    req.on('error', () => resolve(null))
+  })
+}
+
 export function apply(ctx, config) {
   const log = (...a) => { try { console.log('[bili-jar]', ...a) } catch { /* 无控制台 */ } }
 
@@ -123,6 +142,7 @@ export function apply(ctx, config) {
   const poolFile = join(stateDir, 'pool.json')
   const shownFile = join(stateDir, 'shown.json')
   const reasonsFile = join(stateDir, 'reasons.json')
+  const overridesFile = join(stateDir, 'config.json')
   const version = (() => {
     try { return String(JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8')).version || '') } catch { return '' }
   })()
@@ -136,6 +156,8 @@ export function apply(ctx, config) {
   let prevPool = readJson(poolFile, [])
   let lastShown = readJson(shownFile, [])
   let reasons = loadReasonCache(reasonsFile)
+  /** 罐子里那份配置：优先级最高（原生设置页看不见这些字段，只能自己存） */
+  let overrides = readJson(overridesFile, {})
   let building = null
   let explaining = null
 
@@ -156,19 +178,21 @@ export function apply(ctx, config) {
     const row = settingsRow()
     const src = row?.value && typeof row.value === 'object' ? row.value : config
     const c = (src && typeof src === 'object') ? src : {}
-    const axes = toArr(c.axes)
+    const merged = { ...c, ...overrides }
+    const axes = toArr(merged.axes)
     return {
       axes: axes.length ? axes : DEFAULTS.axes.slice(),
-      ups: toArr(c.ups),
-      fanMin: toNum(c.fanMin, 0),
-      fanMax: toNum(c.fanMax, 0),
-      minMinutes: toNum(c.minMinutes, 8),
-      maxMinutes: toNum(c.maxMinutes, 90),
-      minPlay: toNum(c.minPlay, 10000),
-      mainCount: toNum(c.mainCount, 5),
-      showCharging: toBool(c.showCharging),
-      explainOn: c.explainOn === undefined ? true : toBool(c.explainOn),
-      reasonStyle: toStr(c.reasonStyle),
+      ups: toArr(merged.ups),
+      fanMin: toNum(merged.fanMin, 0),
+      fanMax: toNum(merged.fanMax, 0),
+      minMinutes: toNum(merged.minMinutes, 8),
+      maxMinutes: toNum(merged.maxMinutes, 90),
+      minPlay: toNum(merged.minPlay, 10000),
+      mainCount: toNum(merged.mainCount, 5),
+      showCharging: toBool(merged.showCharging),
+      curatorOn: merged.curatorOn === undefined ? true : toBool(merged.curatorOn),
+      explainOn: merged.explainOn === undefined ? true : toBool(merged.explainOn),
+      reasonStyle: toStr(merged.reasonStyle),
     }
   }
 
@@ -179,8 +203,9 @@ export function apply(ctx, config) {
     building = (async () => {
       try {
         const t0 = Date.now()
+        const cfg = cfgNow()
         const exclude = force ? lastShown : []
-        const r = await buildPool({ ...cfgNow(), exclude }, (m) => log(m), prevPool)
+        const r = await buildPool({ ...cfg, exclude }, (m) => log(m), prevPool)
         const out = { ...r, tookMs: Date.now() - t0, cached: false, excluded: exclude.length }
         feedCache = out
         lastShown = (r.main || []).map((c) => c.bvid)
@@ -190,6 +215,24 @@ export function apply(ctx, config) {
           try { writeFileSync(poolFile, JSON.stringify(prevPool), 'utf8') } catch (e) { log(`pool 落盘失败：${e?.message ?? e}`) }
         }
         try { writeFileSync(feedFile, JSON.stringify(out), 'utf8') } catch (e) { log(`feed 落盘失败：${e?.message ?? e}`) }
+
+        // ⭐ 策展人：规则给候选，模型挑 5 条并写理由
+        if (cfg.curatorOn && (r.shortlist || []).length) {
+          const t1 = Date.now()
+          const c = await curate(ctx, r.shortlist, cfg.reasonStyle, { pick: cfg.mainCount })
+          if (c.ok) {
+            const byBvid = new Map((r.shortlist || []).map((x) => [x.bvid, x]))
+            const curated = c.picks.map((p, i) => ({ ...byBvid.get(p.bvid), why: p.why, rank: i + 1 }))
+            feedCache = { ...out, main: curated, curated: true, curatorMs: Date.now() - t1 }
+            for (const p of c.picks) reasons[p.bvid] = { text: p.why, at: Date.now() }
+            saveReasonCache(reasonsFile, reasons)
+            try { writeFileSync(feedFile, JSON.stringify(feedCache), 'utf8') } catch { /* 无所谓 */ }
+            return feedCache
+          }
+          log(`策展失败，退回规则片单：${c.note}`)
+          feedCache = { ...out, curated: false, curatorNote: c.note }
+          return feedCache
+        }
         return out
       } catch (e) {
         log(`建池失败：${e?.message ?? e}`)
@@ -202,7 +245,7 @@ export function apply(ctx, config) {
     return building
   }
 
-  /** 给当前这批生成「推荐理由」；已经写过的直接复用 */
+  /** 给当前这批补理由（没走策展人时用） */
   async function getReasons(force) {
     if (explaining) return explaining
     explaining = (async () => {
@@ -211,6 +254,7 @@ export function apply(ctx, config) {
       const out = {}
       let generated = 0
       for (const it of items) {
+        if (it.why) { out[it.bvid] = it.why; continue }
         const hit = reasons[it.bvid]
         if (hit?.text && !force) { out[it.bvid] = hit.text; continue }
         if (generated >= 6) break
@@ -237,26 +281,33 @@ export function apply(ctx, config) {
         uptimeMs: Date.now() - startedAt, hits,
         stateDir, hostNotes,
         poolSize: Array.isArray(prevPool) ? prevPool.length : 0,
-        lastShown,
-        feed: feedCache ? { ts: feedCache.ts, main: feedCache.main?.length ?? 0, up: feedCache.up?.length ?? 0 } : null,
+        feed: feedCache ? { ts: feedCache.ts, main: feedCache.main?.length ?? 0, curated: Boolean(feedCache.curated) } : null,
       })
     }
 
     if (req.method === 'GET' && p === '/state') {
-      return sendJson(res, 200, { ok: true, stateDir, config: cfgNow(), feedTs: feedCache?.ts ?? null, poolSize: prevPool.length, lastShown })
+      return sendJson(res, 200, { ok: true, stateDir, config: cfgNow(), overrides, feedTs: feedCache?.ts ?? null, poolSize: prevPool.length })
+    }
+
+    if (req.method === 'POST' && p === '/config') {
+      const body = await readBody(req)
+      if (!body || typeof body !== 'object') return sendJson(res, 400, { ok: false, error: 'body 不是 JSON' })
+      const allow = Object.keys(DEFAULTS)
+      for (const [k, v] of Object.entries(body)) if (allow.includes(k)) overrides[k] = v
+      try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch (e) { log(`配置落盘失败：${e?.message ?? e}`) }
+      return sendJson(res, 200, { ok: true, config: cfgNow(), overrides })
     }
 
     if (req.method === 'GET' && p === '/debug') {
       let rows = []
       try { rows = ctx.settings?.describe?.() || [] } catch (e) { rows = String(e?.message ?? e) }
-      const row = settingsRow(true)
       return sendJson(res, 200, {
         ok: true,
-        configDump: inspect(config, { depth: 2, breakLength: 120 }).slice(0, 1200),
-        rowFound: Boolean(row),
-        rowDump: inspect(row, { depth: 3, breakLength: 120 }).slice(0, 1600),
+        rowFound: Boolean(settingsRow(true)),
         rowsCount: Array.isArray(rows) ? rows.length : rows,
+        configDump: inspect(config, { depth: 1, breakLength: 120 }).slice(0, 600),
         cfg: cfgNow(),
+        overrides,
         poolSize: prevPool.length,
         llm: Boolean(ctx.llm || ctx.get?.('llm')),
       })
@@ -291,5 +342,5 @@ export function apply(ctx, config) {
     log(`HTTP 路由没挂上：${e?.message ?? e}`)
   }
 
-  log(`已挂载（家=${stateDir}，版本=${version}，池=${prevPool.length}，缓存=${feedCache ? '有' : '无'}）`)
+  log(`已挂载（家=${stateDir}，版本=${version}，池=${prevPool.length}）`)
 }
