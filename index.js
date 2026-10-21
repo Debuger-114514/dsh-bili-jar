@@ -18,6 +18,7 @@ import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
 import { buildPool, toCard, axisSim } from './lib/pool.mjs'
 import { AXIS_TREE, setUserTree, getUserTree, nodeFor, suggestSubs } from './lib/tree.mjs'
+import { reviewClusters } from './lib/tree-review.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage, migrateUsage } from './lib/usage.mjs'
 import { writeStateDoc } from './lib/statefile.mjs'
@@ -598,14 +599,43 @@ export function apply(ctx, config) {
       return sendJson(res, 200, { ok: true, nodes: { [axis]: { search: nodeFor(axis).search || [], subs: nodeFor(axis).subs || [] } } })
     }
 
-    /** 从现有池子里挖子簇建议（tag 的 DF + 两两共现 PMI），挖出来不自动采纳 */
+    /**
+     * 从现有池子里挖子簇建议（tag 的 DF + 两两共现 PMI）。
+     * `review=1` 时再让模型过一遍：判要不要、起个能当标签用的名字、说一句为什么。
+     * 挖出来**不会自动写进树**，要不要由人点。
+     */
     if (req.method === 'GET' && p === '/tree/suggest') {
       const axis = String(url.searchParams.get('axis') || '').trim()
       if (!axis) return sendJson(res, 400, { ok: false, error: '缺 axis' })
       const items = (prevPool && prevPool.length) ? prevPool : (feedCache?.pool || [])
       if (!items.length) return sendJson(res, 200, { ok: false, error: '池子是空的，先刷一轮' })
+
       const sg = suggestSubs(items, axis, axisSim, { maxClusters: 4, minDf: 3 })
-      return sendJson(res, 200, { ok: true, ...sg })
+      const wantReview = url.searchParams.get('review') === '1'
+      if (!wantReview || !sg.clusters.length) return sendJson(res, 200, { ok: true, ...sg })
+
+      const cur = cfgNow()
+      const r = await reviewClusters(ctx, {
+        axis,
+        node: nodeFor(axis),
+        clusters: sg.clusters,
+        api: { base: cur.apiBase, key: cur.apiKey, model: cur.apiModel },
+      })
+      if (!r.ok) {
+        logWarn('tree:review-fail', r.note || '')
+        return sendJson(res, 200, { ok: true, ...sg, reviewed: false, reviewNote: r.note || '模型没筛成，这是原始建议' })
+      }
+      logInfo('tree:review', `${axis} 留 ${r.kept.length} / 丢 ${r.dropped.length}`)
+      return sendJson(res, 200, {
+        ok: true,
+        axis: sg.axis,
+        sampled: sg.sampled,
+        threshold: sg.threshold,
+        loose: sg.loose,
+        reviewed: true,
+        clusters: r.kept,
+        dropped: r.dropped,
+      })
     }
 
     /* ── 语气预设：存的是"说话什么样"，不是整套配置 ──────────────────

@@ -30,13 +30,13 @@ console.log(`池子 ${pool.length} 条\n`)
 for (const axis of list) {
   const n = nodeFor(axis)
   const sg = suggestSubs(pool, axis, axisSim, { maxClusters: 4, minDf: 3 })
-  console.log(`【${axis}】命中 ${sg.sampled} 条 · 现有子簇 ${(n.subs || []).length} 个`)
+  console.log(`【${axis}】命中 ${sg.sampled} 条 · 现有子簇 ${(n.subs || []).length} 个 · PMI 阈值 ${sg.threshold}`)
   if (!sg.clusters.length) {
     console.log('  没有够格的建议（tag 太少或太散）\n')
     continue
   }
   for (const c of sg.clusters) {
-    console.log(`  · ${c.name}（${c.df} 条）← ${c.terms.join(' / ')}`)
+    console.log(`  · ${c.name}（${c.df} 条，特异度 ${c.spec}）← ${c.terms.join(' / ')}`)
   }
   if (sg.loose.length) console.log(`  零散：${sg.loose.map((x) => `${x.tag}(${x.df})`).join('  ')}`)
   console.log('')

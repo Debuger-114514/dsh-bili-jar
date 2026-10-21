@@ -810,26 +810,36 @@
               }
               const sug = el('button', 'save', '看建议')
               sug.type = 'button'
+              sug.title = '先从池子里挖，再让模型筛一遍（约 ¥0.002）'
               sug.onclick = async () => {
                 sug.disabled = true
                 sug.textContent = '挖…'
                 try {
-                  const r = await fetch(API + '/tree/suggest?axis=' + encodeURIComponent(ax), { credentials: 'same-origin', cache: 'no-store' })
+                  const r = await fetch(API + '/tree/suggest?axis=' + encodeURIComponent(ax) + '&review=1', { credentials: 'same-origin', cache: 'no-store' })
                   const sd = await r.json()
                   if (!sd.ok) { treeMsg.textContent = sd.error || '没有建议'; return }
-                  if (!sd.clusters || !sd.clusters.length) { treeMsg.textContent = `${ax}：没有够格的建议`; return }
-                  treeMsg.textContent = ''
                   const out = el('div', 'chips2')
+                  if (!sd.clusters || !sd.clusters.length) {
+                    // 模型把候选都否了 —— 把它的理由摊开，比只说"没有"有用
+                    const why = (sd.dropped || []).map((d) => `${d.seed}：${d.why}`).join('；')
+                    treeMsg.textContent = why ? `${ax}：都没留下 —— ${why}` : `${ax}：没有够格的建议`
+                    return
+                  }
+                  treeMsg.textContent = sd.reviewed ? '模型筛过一遍了，点一个加进去' : (sd.reviewNote || '')
                   for (const c of sd.clusters) {
                     const b = el('button', 'save', `＋ ${c.name}（${c.df} 条）`)
                     b.type = 'button'
-                    b.title = c.terms.join(' / ')
+                    b.title = (c.why ? c.why + ' ｜ ' : '') + (c.terms || []).join(' / ')
                     b.onclick = async () => {
                       await treeApi({ axis: ax, action: 'addSub', name: c.name, terms: c.terms })
                       treeMsg.textContent = `给「${ax}」加上子簇「${c.name}」`
                       paintTree()
                     }
                     out.appendChild(b)
+                  }
+                  if (sd.dropped && sd.dropped.length) {
+                    const d = el('div', 'tip', '模型否掉的：' + sd.dropped.map((x) => `${x.seed}（${x.why}）`).join('；'))
+                    line.appendChild(d)
                   }
                   line.appendChild(out)
                 } finally {
