@@ -226,6 +226,18 @@
 .mini-x:hover{background:#ffe6ec;}
 .mini iframe{display:block;width:100%;aspect-ratio:16/9;border:0;background:#000;}
 
+/* 头像选择条 */
+.avstrip{display:flex;gap:8px;flex-wrap:wrap;}
+.avpick{position:relative;width:58px;padding:0;border:2px solid transparent;border-radius:13px;background:transparent;
+  cursor:pointer;font-family:inherit;display:flex;flex-direction:column;align-items:center;gap:3px;transition:all .15s;}
+.avpick img{width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid var(--ink);
+  background:#fff;box-shadow:2px 2px 0 rgba(30,42,99,.14);transition:transform .15s;}
+.avpick span{font-size:9.5px;color:var(--muted);font-weight:700;white-space:nowrap;}
+.avpick:hover img{transform:translateY(-2px) scale(1.04);}
+.avpick[data-on]{border-color:var(--ink);background:var(--sky-l);}
+.avpick[data-on] span{color:var(--ink);}
+.avpick[data-on] img{box-shadow:0 0 0 3px rgba(169,205,245,.8);}
+
 .cfg .avprev{width:46px;height:46px;border-radius:12px;object-fit:cover;background:#fff;
   border:2px solid var(--ink);box-shadow:2px 2px 0 rgba(30,42,99,.14);flex:none;}
 .av{width:18px;height:18px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;
@@ -756,6 +768,38 @@
           // ---- 头像 ----
           const avWrap = el('div', 'ced')
           avWrap.appendChild(el('div', 'lbl', '头像（推荐理由旁边那只）'))
+
+          // 四档内置头像，点一下就用；自己传的图会盖住它们
+          const AV_PRESETS = [['sleep', '睡觉'], ['tv', '看电视'], ['explore', '探险'], ['other', '别的插件']]
+          const avStrip = el('div', 'avstrip')
+          for (const [key, label] of AV_PRESETS) {
+            const b = el('button', 'avpick')
+            b.type = 'button'
+            b.title = '换成「' + label + '」'
+            const im = document.createElement('img')
+            im.src = API + '/avatar?p=' + key
+            im.alt = label
+            b.appendChild(im)
+            b.appendChild(el('span', null, label))
+            if ((cfgDraft.avatarPreset || 'sleep') === key) b.dataset.on = '1'
+            b.addEventListener('click', async () => {
+              try {
+                const r = await fetch(API + '/avatar/preset', {
+                  method: 'POST', credentials: 'same-origin',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ name: key }),
+                })
+                const d = await r.json()
+                if (!d.ok) { avMsg.textContent = d.error || '换不了'; return }
+                cfgDraft.avatarPreset = key
+                avMsg.textContent = '已换成「' + label + '」'
+                render()
+              } catch { avMsg.textContent = '换不了' }
+            })
+            avStrip.appendChild(b)
+          }
+          avWrap.appendChild(avStrip)
+
           const avRow = el('div', 'row2')
           const avImg = document.createElement('img')
           avImg.className = 'avprev'

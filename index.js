@@ -26,6 +26,15 @@ import { qrDataUrl } from './lib/qr.mjs'
 import { setLogFile, info as logInfo, warn as logWarn, tail as logTail } from './lib/log.mjs'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
+
+/** 可选头像：都是 assets/ 里的方图（从插画上裁的脸） */
+const AVATAR_PRESETS = {
+  sleep: { file: 'av-sleep.png', label: '睡觉' },
+  tv: { file: 'av-tv.png', label: '看电视' },
+  explore: { file: 'av-explore.png', label: '探险' },
+  other: { file: 'av-other.png', label: '另一个插件' },
+}
+const DEFAULT_AVATAR_PRESET = 'sleep'
 const { z, notes: hostNotes } = await loadHostDeps()
 
 export const name = 'dsh-bili-jar'
@@ -51,6 +60,8 @@ const DEFAULTS = {
   contentSource: 'self',
   /** 复用 bili-scroll 的 B站 登录（用于取 AI 字幕）。默认关，且不勾选绝不读那个文件 */
   useScrollLogin: false,
+  /** 头像预设：sleep / tv / explore / other（custom = 自己上传的） */
+  avatarPreset: 'sleep',
 }
 
 /**
@@ -253,6 +264,7 @@ export function apply(ctx, config) {
       apiModel: toStr(merged.apiModel) || DEFAULTS.apiModel,
       contentSource: toStr(merged.contentSource) || DEFAULTS.contentSource,
       useScrollLogin: merged.useScrollLogin === true,
+      avatarPreset: toStr(merged.avatarPreset) || DEFAULTS.avatarPreset,
     }
   }
 
@@ -531,6 +543,18 @@ export function apply(ctx, config) {
     }
 
     /* ── 头像：换成自己的 ──────────────────────────────────────────────── */
+    /** 选一个内置头像。选完把上传过的那张删掉，否则它永远盖住预设。 */
+    if (req.method === 'POST' && p === '/avatar/preset') {
+      const body = await readBody(req)
+      const name = String(body?.name || '')
+      if (!AVATAR_PRESETS[name]) return sendJson(res, 400, { ok: false, error: `没有这个预设：${name}` })
+      overrides = { ...overrides, avatarPreset: name }
+      try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 落盘失败不影响本次 */ }
+      try { if (existsSync(join(stateDir, 'avatar.png'))) rmSync(join(stateDir, 'avatar.png')) } catch { /* 删不掉算了 */ }
+      logInfo('avatar:preset', `${name}（${AVATAR_PRESETS[name].label}）`)
+      return sendJson(res, 200, { ok: true, preset: name })
+    }
+
     if (req.method === 'POST' && p === '/avatar') {
       const body = await readBody(req)
       const dataUrl = String(body?.dataUrl || '')
@@ -542,6 +566,7 @@ export function apply(ctx, config) {
       try {
         mkdirSync(stateDir, { recursive: true })
         writeFileSync(join(stateDir, 'avatar.png'), buf)
+        overrides = { ...overrides, avatarPreset: 'custom' }
         logInfo('avatar:set', `${Math.round(buf.length / 1024)} KB`)
         return sendJson(res, 200, { ok: true, uploadAt: Date.now() })
       } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
@@ -714,9 +739,14 @@ export function apply(ctx, config) {
     // 桌宠头像：默认是蓝发鲸鱼女仆（来自 dsh-whale-widget，MIT）
     if (req.method === 'GET' && p === '/avatar') {
       try {
-        // 自己换过头像就用那份，否则用包里带的默认（蓝发鲸鱼女仆）
+        const want = String(url.searchParams.get('p') || '')
+        const chosen = AVATAR_PRESETS[want] ? want : (AVATAR_PRESETS[overrides.avatarPreset] ? overrides.avatarPreset : DEFAULT_AVATAR_PRESET)
         const own = join(stateDir, 'avatar.png')
-        const buf = readFileSync(existsSync(own) ? own : join(PLUGIN_DIR, 'assets', 'avatar.png'))
+        // ?p= 只看某个预设；不带参数时：自己上传过的优先，其次预设
+        const file = want && AVATAR_PRESETS[want]
+          ? join(PLUGIN_DIR, 'assets', AVATAR_PRESETS[want].file)
+          : (existsSync(own) ? own : join(PLUGIN_DIR, 'assets', AVATAR_PRESETS[chosen].file))
+        const buf = readFileSync(file)
         res.writeHead(200, {
           'content-type': 'image/png',
           // 换头像要立刻看到，别让浏览器缓存挡住
