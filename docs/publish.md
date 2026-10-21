@@ -11,12 +11,25 @@
 
 ### 发布
 
-```bash
-# 一次性：登录（token 存 ~/.npmrc）
-npm login
+**方式一：推 tag，GitHub Actions 自动发**（推荐，一次配好终身省事）
 
-# 每次发版：先验一下包里有什么，再发
-pnpm pack                       # 产出 dsh-bili-jar-x.y.z.tgz，可以 tar -tzf 看
+1. 在 npm 建一个 **Automation** token（classic 或 granular 都行，权限要 `read and write` 到包）
+2. 仓库 → Settings → Secrets and variables → Actions → 新建 `NPM_TOKEN`
+3. 发版：
+
+```bash
+pnpm check                    # 自检：文件齐不齐、有没有 NUL、体积是否异常
+npm version patch             # 或 minor / major，会自动打 tag
+git push --follow-tags        # 推 tag → 触发 .github/workflows/publish.yml
+```
+
+工作流会先跑自检、核对 `package.json` 的版本号和 tag 是否一致，再 `npm publish --provenance`。
+
+**方式二：本地直接发**
+
+```bash
+npm login                      # 一次性，token 存 ~/.npmrc
+pnpm check                     # 自检（prepublishOnly 也会再跑一次）
 npm publish --access public
 ```
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-jar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH 插件：电子榨菜罐 —— 按你的兴趣轴定向挑 B站 视频的常驻小挂件",
   "keywords": [
     "dsh",
@@ -23,7 +23,10 @@
     "cordis.patch.yml",
     "lib",
     "assets",
-    "README.md"
+    "README.md",
+    "NOTICE",
+    "docs/publish.md",
+    "docs/presets.md"
   ],
   "engines": {
     "dsh": ">=0.1.7-rc.1",
@@ -65,5 +68,10 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "scripts": {
+    "check": "node tools/pack-check.mjs",
+    "prepublishOnly": "node tools/pack-check.mjs",
+    "release": "npm version patch && git push --follow-tags"
   }
 }
