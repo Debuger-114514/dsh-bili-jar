@@ -39,7 +39,7 @@ const DEFAULTS = {
   showCharging: false,
   curatorOn: true,
   explainOn: true,
-  reasonStyle: '',
+  reasonStyle: '像蓝发鲸鱼女仆在推荐：语气软、句子短、带一点俏皮，但不说废话，不堆感叹号。',
 }
 
 /**
@@ -195,7 +195,7 @@ export function apply(ctx, config) {
       showCharging: toBool(merged.showCharging),
       curatorOn: merged.curatorOn === undefined ? true : toBool(merged.curatorOn),
       explainOn: merged.explainOn === undefined ? true : toBool(merged.explainOn),
-      reasonStyle: toStr(merged.reasonStyle),
+      reasonStyle: toStr(merged.reasonStyle) || DEFAULTS.reasonStyle,
     }
   }
 
@@ -320,6 +320,22 @@ export function apply(ctx, config) {
       const force = url.searchParams.get('refresh') === '1'
       const r = await getFeed(force)
       return sendJson(res, 200, r)
+    }
+
+    // 桌宠头像：默认是蓝发鲸鱼女仆（来自 dsh-whale-widget，MIT）
+    if (req.method === 'GET' && p === '/avatar') {
+      try {
+        const buf = readFileSync(join(PLUGIN_DIR, 'assets', 'avatar.png'))
+        res.writeHead(200, {
+          'content-type': 'image/png',
+          'cache-control': 'public, max-age=86400',
+          'content-length': buf.length,
+        })
+        res.end(buf)
+        return
+      } catch {
+        return sendJson(res, 404, { ok: false, error: '没有头像文件' })
+      }
     }
 
     if (req.method === 'GET' && p === '/explain') {

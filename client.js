@@ -77,6 +77,8 @@
 .pet{width:20px;height:20px;flex:none;cursor:pointer;transition:transform .15s ease;}
 .pet:hover{transform:scale(1.1);}
 .pet svg{width:100%;height:100%;display:block;}
+.pet img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;
+  border:1px solid rgba(255,255,255,.22);background:#1b1d21;}
 .item .chips{margin-top:5px;display:flex;flex-wrap:wrap;gap:4px;}
 .item .chips span{font-size:10px;padding:1px 6px;border-radius:5px;background:rgba(255,255,255,.06);color:#9aa0a6;}
 .item .acts{margin-top:7px;display:flex;gap:6px;}
@@ -346,8 +348,12 @@
           if (whyText) {
             const row = el('div', 'whyRow')
             const pet = el('span', 'pet')
-            pet.innerHTML = PET_SVG
             pet.title = '点我看更长的推荐理由'
+            const img = document.createElement('img')
+            img.src = API + '/avatar'
+            img.alt = ''
+            img.onerror = () => { pet.innerHTML = PET_SVG }
+            pet.appendChild(img)
             row.appendChild(pet)
 
             const w = el('div', 'why2', whyText)
