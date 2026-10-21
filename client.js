@@ -104,6 +104,9 @@
   font-family:inherit;resize:vertical;color:#e8eaed;background:rgba(255,255,255,.05);
   border:1px solid rgba(255,255,255,.12);}
 .cfg .ta:focus{outline:none;border-color:rgba(59,130,246,.6);}
+.cfg .ta1{width:100%;box-sizing:border-box;padding:6px 8px;border-radius:7px;font-size:11px;font-family:inherit;
+  color:#e8eaed;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);}
+.cfg .ta1:focus{outline:none;border-color:rgba(59,130,246,.6);}
 .cfg .save{align-self:flex-start;font-size:11.5px;padding:5px 14px;border-radius:7px;cursor:pointer;
   font-family:inherit;border:1px solid rgba(59,130,246,.45);background:rgba(59,130,246,.16);color:#93c5fd;}
 .cfg .tip{font-size:10.5px;color:#6b7280;line-height:15px;}
@@ -495,6 +498,22 @@
           }
           box.appendChild(chipEditor('axes', '兴趣轴（回车加，× 删）', '例如 数码'))
           box.appendChild(chipEditor('ups', '固定关注的 UP（UID 或名字）', '例如 江平舟'))
+
+          // ---- API 设置（默认 DeepSeek 官方；不填 key 就走宿主模型）----
+          const apiRow = (label, key, ph) => {
+            const wrap = el('div', 'ced')
+            wrap.appendChild(el('div', 'lbl', label))
+            const inp = el('input', 'ta1')
+            inp.value = cfgDraft[key] || ''
+            inp.placeholder = ph
+            inp.autocomplete = 'off'
+            inp.addEventListener('change', async () => { await saveConfig({ [key]: inp.value.trim() }) })
+            wrap.appendChild(inp)
+            return wrap
+          }
+          box.appendChild(apiRow('API 地址', 'apiBase', 'https://api.deepseek.com'))
+          box.appendChild(apiRow('API Key（只存本机）', 'apiKey', 'sk-...'))
+          box.appendChild(apiRow('模型', 'apiModel', 'deepseek-chat'))
 
           box.appendChild(el('div', 'lbl', '语言风格'))
           const ta = el('textarea', 'ta')

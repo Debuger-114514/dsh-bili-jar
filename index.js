@@ -40,6 +40,9 @@ const DEFAULTS = {
   curatorOn: true,
   explainOn: true,
   reasonStyle: '像蓝发鲸鱼女仆在推荐：语气软、句子短、带一点俏皮，但不说废话，不堆感叹号。',
+  apiBase: 'https://api.deepseek.com',
+  apiKey: '',
+  apiModel: 'deepseek-chat',
 }
 
 /**
@@ -196,6 +199,9 @@ export function apply(ctx, config) {
       curatorOn: merged.curatorOn === undefined ? true : toBool(merged.curatorOn),
       explainOn: merged.explainOn === undefined ? true : toBool(merged.explainOn),
       reasonStyle: toStr(merged.reasonStyle) || DEFAULTS.reasonStyle,
+      apiBase: toStr(merged.apiBase) || DEFAULTS.apiBase,
+      apiKey: toStr(merged.apiKey),
+      apiModel: toStr(merged.apiModel) || DEFAULTS.apiModel,
     }
   }
 
@@ -222,7 +228,10 @@ export function apply(ctx, config) {
         // ⭐ 策展人：规则给候选，模型挑 5 条并写理由
         if (cfg.curatorOn && (r.shortlist || []).length) {
           const t1 = Date.now()
-          const c = await curate(ctx, r.shortlist, cfg.reasonStyle, { pick: cfg.mainCount })
+          const c = await curate(ctx, r.shortlist, cfg.reasonStyle, {
+            pick: cfg.mainCount,
+            api: { base: cfg.apiBase, key: cfg.apiKey, model: cfg.apiModel },
+          })
           if (c.ok) {
             const byBvid = new Map((r.shortlist || []).map((x) => [x.bvid, x]))
             const curated = c.picks.map((p, i) => ({ ...byBvid.get(p.bvid), why: p.why, rank: i + 1 }))
@@ -261,7 +270,9 @@ export function apply(ctx, config) {
         const hit = reasons[it.bvid]
         if (hit?.text && !force) { out[it.bvid] = hit.text; continue }
         if (generated >= 6) break
-        const text = await writeReason(ctx, it, cfg.reasonStyle)
+        const text = await writeReason(ctx, it, cfg.reasonStyle, {
+          api: { base: cfg.apiBase, key: cfg.apiKey, model: cfg.apiModel },
+        })
         if (text) {
           reasons[it.bvid] = { text, at: Date.now() }
           out[it.bvid] = text
@@ -367,7 +378,10 @@ export function apply(ctx, config) {
           `命中的轴：${item.axis || ''}${item.sub ? ' · ' + item.sub : ''}`,
           item.why ? `一句话理由：${item.why}` : '',
         ].filter(Boolean).join('\n')
-        const long = await writeReasonCore(ctx, { system, user, maxTokens: 400, timeoutMs: 45000 })
+        const long = await writeReasonCore(ctx, {
+          system, user, maxTokens: 400, timeoutMs: 45000,
+          api: { base: cfg.apiBase, key: cfg.apiKey, model: cfg.apiModel },
+        })
         if (long) {
           reasons[bvid] = { ...(reasons[bvid] || {}), long, at: Date.now() }
           saveReasonCache(reasonsFile, reasons)
