@@ -20,7 +20,7 @@ import { buildPool } from './lib/pool.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage } from './lib/usage.mjs'
 import { curate } from './lib/curator.mjs'
-import { adoptCookies, videoSubtitle, videoComments } from './lib/bili.mjs'
+import { adoptCookies, videoSubtitle, videoComments, loginStart, loginPoll, hasLogin } from './lib/bili.mjs'
 import { setLogFile, info as logInfo, warn as logWarn, tail as logTail } from './lib/log.mjs'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
@@ -251,6 +251,15 @@ export function apply(ctx, config) {
    * ⚠️ 不勾选时**绝不**去读那个文件。
    */
   let adoptedAt = 0
+  // 启动时优先用插件自己的凭证（扫码登录存下来的那份）
+  try {
+    const own = join(stateDir, 'credential.json')
+    if (existsSync(own)) {
+      const n = adoptCookies(JSON.parse(readFileSync(own, 'utf8')))
+      if (n) logInfo('login:own', `${n} 个字段（插件自己的凭证）`)
+    }
+  } catch { /* 没有就算了 */ }
+
   function maybeAdoptLogin(cfg) {
     if (!cfg.useScrollLogin) return false
     if (Date.now() - adoptedAt < 10 * 60 * 1000) return true
@@ -468,6 +477,33 @@ export function apply(ctx, config) {
     if (req.method === 'GET' && p === '/log') {
       const n = Math.min(300, Number(url.searchParams.get('n')) || 100)
       return sendJson(res, 200, { ok: true, file: logFile, lines: logTail(n) })
+    }
+
+    // B站 扫码登录（插件自己的，不依赖 bili-scroll）
+    if (req.method === 'GET' && p === '/login/start') {
+      const r = await loginStart()
+      if (r.ok) logInfo('login:start', '已生成二维码')
+      else logWarn('login:start-fail', r.error || '')
+      return sendJson(res, 200, r)
+    }
+
+    if (req.method === 'GET' && p === '/login/poll') {
+      const key = url.searchParams.get('key') || ''
+      if (!key) return sendJson(res, 400, { ok: false, error: '缺 key' })
+      const r = await loginPoll(key)
+      if (r.state === 'ok' && r.credential) {
+        try {
+          writeFileSync(join(stateDir, 'credential.json'), JSON.stringify(r.credential), 'utf8')
+          adoptCookies(r.credential)
+          adoptedAt = Date.now()
+          logInfo('login:ok', '凭证已保存到插件家目录')
+        } catch (e) { logWarn('login:save-fail', String(e?.message ?? e)) }
+      }
+      return sendJson(res, 200, { ok: r.ok, state: r.state, message: r.message || '', hasCredential: Boolean(r.credential) })
+    }
+
+    if (req.method === 'GET' && p === '/login/status') {
+      return sendJson(res, 200, { ok: true, loggedIn: hasLogin(), ownCredential: existsSync(join(stateDir, 'credential.json')) })
     }
 
     // 赞 / 踩：只记本地，绝不落到 B站 账号

@@ -112,6 +112,8 @@
 .cfg .save{align-self:flex-start;font-size:11.5px;padding:5px 14px;border-radius:7px;cursor:pointer;
   font-family:inherit;border:1px solid rgba(59,130,246,.45);background:rgba(59,130,246,.16);color:#93c5fd;}
 .cfg .tip{font-size:10.5px;color:#6b7280;line-height:15px;}
+.cfg .loginlink{color:#93c5fd;font-size:11px;text-decoration:none;}
+.cfg .loginlink:hover{text-decoration:underline;}
 .cfg .ced{display:flex;flex-direction:column;gap:5px;}
 .chips2{display:flex;flex-wrap:wrap;gap:5px;align-items:center;}
 .chip2{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 7px;border-radius:6px;
@@ -480,14 +482,18 @@
           const mkSwitch = (key) => {
             const b = el('button', 'sw')
             b.type = 'button'
-            b.dataset.on = cfgDraft[key] ? '1' : ''
-            b.textContent = cfgDraft[key] ? '开' : '关'
+            const paint = (on) => {
+              if (on) b.dataset.on = '1'
+              else delete b.dataset.on
+              b.textContent = on ? '开' : '关'
+            }
+            paint(Boolean(cfgDraft[key]))
             b.addEventListener('click', async () => {
               const next = !cfgDraft[key]
               cfgDraft[key] = next
-              b.dataset.on = next ? '1' : ''
-              b.textContent = next ? '开' : '关'
-              await saveConfig({ [key]: next })
+              paint(next)
+              const ok = await saveConfig({ [key]: next })
+              if (!ok) { cfgDraft[key] = !next; paint(!next) }
             })
             return b
           }
@@ -547,6 +553,50 @@
           box.appendChild(apiRow('API 地址', 'apiBase', 'https://api.deepseek.com'))
           box.appendChild(apiRow('API Key（只存本机）', 'apiKey', 'sk-...'))
           box.appendChild(apiRow('模型', 'apiModel', 'deepseek-chat'))
+
+          // ---- B站 登录（插件自己的扫码登录，用来取 AI 字幕）----
+          const loginWrap = el('div', 'ced')
+          loginWrap.appendChild(el('div', 'lbl', 'B站 登录（取字幕用）'))
+          const loginStatus = el('div', 'tip', '检查中…')
+          const loginBtn = el('button', 'save', '扫码登录')
+          loginBtn.type = 'button'
+          loginWrap.append(loginBtn, loginStatus)
+          box.appendChild(loginWrap)
+
+          fetch(API + '/login/status', { credentials: 'same-origin', cache: 'no-store' })
+            .then((r) => r.json())
+            .then((d) => { loginStatus.textContent = d.loggedIn ? '已登录' : '未登录' })
+            .catch(() => { loginStatus.textContent = '状态未知' })
+
+          loginBtn.addEventListener('click', async () => {
+            loginBtn.disabled = true
+            loginStatus.textContent = '请求二维码…'
+            try {
+              const r = await fetch(API + '/login/start', { credentials: 'same-origin' })
+              const d = await r.json()
+              if (!d.ok) { loginStatus.textContent = '失败：' + (d.error || ''); loginBtn.disabled = false; return }
+              loginStatus.textContent = ''
+              const a = el('a', 'loginlink', '用手机打开这个链接确认登录 →')
+              a.href = d.url
+              a.target = '_blank'
+              a.rel = 'noreferrer'
+              loginStatus.appendChild(a)
+              const tick = async () => {
+                try {
+                  const pr = await fetch(API + '/login/poll?key=' + encodeURIComponent(d.key), { credentials: 'same-origin' })
+                  const pd = await pr.json()
+                  if (pd.state === 'ok') { loginStatus.textContent = '登录成功 ✓（凭证已存本机）'; loginBtn.disabled = false; return }
+                  if (pd.state === 'expired') { loginStatus.textContent = '二维码过期了，重新点一次'; loginBtn.disabled = false; return }
+                  loginStatus.textContent = pd.state === 'scanned' ? '已扫码，手机上点确认' : '等待扫码…'
+                } catch { /* 网络抖一下继续轮询 */ }
+                setTimeout(tick, 2000)
+              }
+              setTimeout(tick, 1500)
+            } catch {
+              loginStatus.textContent = '请求失败'
+              loginBtn.disabled = false
+            }
+          })
 
           // ---- 内容源 ----
           const csWrap = el('div', 'ced')
