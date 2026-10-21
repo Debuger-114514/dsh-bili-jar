@@ -321,6 +321,8 @@
 
         // ---- 数据 ----
         let feed = null
+        /** 「更多电子榨菜」新捞上来的那批，第一个的位置（渲染后滚过去） */
+        let moreAnchor = null
         let tab = 'main'
         let loading = false
         let later = loadLater()
@@ -371,6 +373,8 @@
             moreBtn.disabled = false
             moreBtn.textContent = '更多电子榨菜'
             if (panel.hidden === false) render()
+            // 新捞上来的在列表最底下，不滚过去就跟没捞一样
+            if (moreAnchor) setTimeout(() => { try { moreAnchor.scrollIntoView({ block: 'start', behavior: 'smooth' }) } catch { /* 老浏览器 */ } }, 30)
           }
         })
 
@@ -755,7 +759,14 @@
             msg(tab === 'main' ? '今天没凑够。试试「换一批」，或者放宽时长/粉丝。' : '固定关注还是空的：去设置里填几个 UP（UID 或名字）。')
             return
           }
-          for (const it of list) bd.appendChild(card(it))
+          for (const it of list) {
+            if (tab === 'main' && it.more && !moreAnchor) {
+              const nMore = list.filter((x) => x.more).length
+              moreAnchor = el('div', 'msg', `↓ 又从池子里捞了 ${nMore} 条（没重新抓）`)
+              bd.appendChild(moreAnchor)
+            }
+            bd.appendChild(card(it))
+          }
 
           const missing = feed.coverage?.missing || []
           if (tab === 'main' && missing.length) msg('这几根轴今天没货：' + missing.join('、'))
