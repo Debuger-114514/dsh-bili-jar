@@ -534,7 +534,10 @@
 
           if (cfgDraft.usage) {
             const u = cfgDraft.usage
-            box.appendChild(el('div', 'tip', `今天 ${u.calls} 次调用 · 约 ${u.inTok + u.outTok} tokens · ¥${u.cost}（估算）`))
+            const t = u.today || u
+            const all = u.total || u
+            box.appendChild(el('div', 'tip', `今天 ${t.calls} 次 · ${t.in + t.out} tok · ¥${t.cost}　累计 ${all.calls} 次 · ¥${all.cost}`))
+            if (u.last) box.appendChild(el('div', 'tip', `最近一次：${u.last.kind} · ${u.last.in}+${u.last.out} tok · ¥${u.last.cost}`))
           }
           box.appendChild(el('div', 'tip', '改完点「换一批」会按新设置重新挑。'))
 
