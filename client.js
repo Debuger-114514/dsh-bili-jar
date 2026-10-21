@@ -541,6 +541,9 @@
           csWrap.appendChild(csSel)
           box.appendChild(csWrap)
 
+          box.appendChild(rowOf('复用「刷B站」的登录（取字幕）', mkSwitch('useScrollLogin')))
+          box.appendChild(el('div', 'tip', '⚠️ 会读 bili-scroll 的 B站 登录凭证（只读），两个插件共享同一份登录态。不勾选时绝不会读那个文件。'))
+
           box.appendChild(el('div', 'lbl', '语言风格'))
           const ta = el('textarea', 'ta')
           ta.rows = 4

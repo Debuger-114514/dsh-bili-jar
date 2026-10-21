@@ -20,6 +20,7 @@ import { buildPool } from './lib/pool.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage } from './lib/usage.mjs'
 import { curate } from './lib/curator.mjs'
+import { adoptCookies, videoSubtitle, videoComments } from './lib/bili.mjs'
 import { setLogFile, info as logInfo, warn as logWarn, tail as logTail } from './lib/log.mjs'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
@@ -46,6 +47,8 @@ const DEFAULTS = {
   apiModel: 'deepseek-chat',
   /** self=只用我们搜的 / scroll=额外读 bili-scroll 的报告 / both=都读 */
   contentSource: 'self',
+  /** 复用 bili-scroll 的 B站 登录（用于取 AI 字幕）。默认关，且不勾选绝不读那个文件 */
+  useScrollLogin: false,
 }
 
 /**
@@ -237,7 +240,70 @@ export function apply(ctx, config) {
       apiKey: toStr(merged.apiKey),
       apiModel: toStr(merged.apiModel) || DEFAULTS.apiModel,
       contentSource: toStr(merged.contentSource) || DEFAULTS.contentSource,
+      useScrollLogin: merged.useScrollLogin === true,
     }
+  }
+
+  /**
+   * 如果需要，接管 bili-scroll 的 B站 登录（只为了取 AI 字幕）。
+   * ⚠️ 不勾选时**绝不**去读那个文件。
+   */
+  let adoptedAt = 0
+  function maybeAdoptLogin(cfg) {
+    if (!cfg.useScrollLogin) return false
+    if (Date.now() - adoptedAt < 10 * 60 * 1000) return true
+    const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+    const f = join(home, 'bili-duty', 'bili_credential.json')
+    if (!existsSync(f)) { logWarn('login:missing', f); return false }
+    try {
+      const cred = JSON.parse(readFileSync(f, 'utf8'))
+      const n = adoptCookies(cred)
+      adoptedAt = Date.now()
+      logInfo('login:adopted', `${n} 个 cookie 字段（来自 bili-scroll）`)
+      return n > 0
+    } catch (e) { logWarn('login:fail', String(e?.message ?? e)); return false }
+  }
+
+  /**
+   * 用真实内容重写推荐语：先取字幕，没有就退到热评。
+   * 一次调用写 5 条，不逐条问。
+   */
+  async function enrichReasons(picks, cfg) {
+    const got = []
+    for (const p of picks) {
+      let content = ''
+      const sub = await videoSubtitle(p.bvid)
+      if (sub.ok) content = sub.text
+      else {
+        const cm = await videoComments(p.bvid, 20)
+        if (cm.ok) content = cm.text
+      }
+      logInfo('content:fetch', `${p.bvid} ${content ? content.length + ' 字' : '无内容'}`)
+      got.push({ ...p, content })
+    }
+    const usable = got.filter((x) => x.content)
+    if (!usable.length) return picks
+
+    const system = [
+      '你在替一个人写「这条视频为什么值得看」的一句话推荐语。',
+      '下面给了你视频的真实内容（字幕或评论摘录），**依据内容写**，不要依据任何数据。',
+      '🔴 不许出现任何数字（播放量、点赞率、收藏率、投币率都不行）。',
+      '40–70 字，口语，具体：讲了什么、怎么讲的、适合什么时候看。不要用「这条视频」开头。',
+      cfg.reasonStyle ? `语气与风格：${cfg.reasonStyle}` : '',
+      '只输出 JSON 数组：[{"bvid":"BV...","why":"..."}]，不要代码块。',
+    ].filter(Boolean).join('\n')
+    const user = usable.map((x, i) => `${i + 1}. ${x.bvid} 《${x.title}》\n内容：${x.content.slice(0, 900)}`).join('\n\n')
+
+    const text = await writeReasonCore(ctx, {
+      system, user, maxTokens: 900, timeoutMs: 60000,
+      api: { base: cfg.apiBase, key: cfg.apiKey, model: cfg.apiModel },
+    })
+    if (!text) { logWarn('content:llm-fail', llmError.msg || '空'); return picks }
+    let arr = null
+    try { const m = text.match(/\[[\s\S]*\]/); arr = JSON.parse(m ? m[0] : text) } catch { arr = null }
+    if (!Array.isArray(arr)) { logWarn('content:parse-fail', text.slice(0, 80)); return picks }
+    const byBvid = new Map(arr.map((x) => [String(x?.bvid || ''), String(x?.why || '').trim()]))
+    return picks.map((p) => (byBvid.get(p.bvid) ? { ...p, why: byBvid.get(p.bvid).slice(0, 160) } : p))
   }
 
   async function getFeed(force) {
@@ -248,6 +314,7 @@ export function apply(ctx, config) {
       try {
         const t0 = Date.now()
         const cfg = cfgNow()
+        maybeAdoptLogin(cfg)
         const exclude = force ? lastShown : []
         const r = await buildPool({ ...cfg, exclude }, (m) => log(m), prevPool)
         logInfo('feed:built', JSON.stringify(r.stats || {}))
@@ -287,7 +354,8 @@ export function apply(ctx, config) {
           if (c.ok) {
             const byBvid = new Map(shortlist.map((x) => [x.bvid, x]))
             const curated = c.picks.map((p, i) => ({ ...byBvid.get(p.bvid), why: p.why, rank: i + 1 }))
-            feedCache = { ...out, main: curated, curated: true, curatorMs: Date.now() - t1 }
+            const enriched = await enrichReasons(curated, cfg)
+            feedCache = { ...out, main: enriched, curated: true, curatorMs: Date.now() - t1 }
             logInfo('curate:ok', `${curated.length} 条 / ${Date.now() - t1}ms`)
             for (const p of c.picks) reasons[p.bvid] = { text: p.why, at: Date.now() }
             saveReasonCache(reasonsFile, reasons)
