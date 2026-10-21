@@ -19,6 +19,7 @@ import { loadHostDeps } from './lib/hostdeps.mjs'
 import { buildPool } from './lib/pool.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage, migrateUsage } from './lib/usage.mjs'
+import { writeStateDoc } from './lib/statefile.mjs'
 import { curate } from './lib/curator.mjs'
 import { adoptCookies, videoSubtitle, videoComments, loginStart, loginPoll, hasLogin } from './lib/bili.mjs'
 import { qrDataUrl } from './lib/qr.mjs'
@@ -187,6 +188,9 @@ export function apply(ctx, config) {
   const overridesFile = join(stateDir, 'config.json')
   const feedbackFile = join(stateDir, 'feedback.jsonl')
   const laterFile = join(stateDir, 'later.json')
+  // 重启会清掉内存里的池子/片单，磁盘上的 json 又没人愿意翻 —— 所以每次启动
+  // 和每轮刷新之后，顺手写一份人眼能看的 STATE.md
+  const refreshStateDoc = () => { try { writeStateDoc(stateDir) } catch { /* 写不出来不影响主流程 */ } }
   const usageFile = join(stateDir, 'usage.json')
   setUsageFile(usageFile)
   try {
@@ -344,6 +348,7 @@ export function apply(ctx, config) {
           try { writeFileSync(poolFile, JSON.stringify(prevPool), 'utf8') } catch (e) { log(`pool 落盘失败：${e?.message ?? e}`) }
         }
         try { writeFileSync(feedFile, JSON.stringify(out), 'utf8') } catch (e) { log(`feed 落盘失败：${e?.message ?? e}`) }
+        refreshStateDoc()
 
         // ⭐ 策展人：规则给候选，模型挑 5 条并写理由
         // ⭐ 内容源：额外把 bili-scroll 报告里挑过的视频并进候选
@@ -377,11 +382,13 @@ export function apply(ctx, config) {
             for (const p of c.picks) reasons[p.bvid] = { text: p.why, at: Date.now() }
             saveReasonCache(reasonsFile, reasons)
             try { writeFileSync(feedFile, JSON.stringify(feedCache), 'utf8') } catch { /* 无所谓 */ }
+            refreshStateDoc()
             return feedCache
           }
           log(`策展失败，退回规则片单：${c.note}`)
           logWarn('curate:fail', String(c.note || '未知'))
           feedCache = { ...out, curated: false, curatorNote: c.note }
+          refreshStateDoc()
           return feedCache
         }
         return out
@@ -636,4 +643,5 @@ export function apply(ctx, config) {
   }
 
   log(`已挂载（家=${stateDir}，版本=${version}，池=${prevPool.length}）`)
+  refreshStateDoc()
 }
