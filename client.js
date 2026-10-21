@@ -189,6 +189,8 @@
   font-family:inherit;border:2px solid var(--ink);background:var(--sky);color:#12224f;
   box-shadow:2px 2px 0 rgba(30,42,99,.2);transition:transform .1s,box-shadow .1s;}
 .cfg .save:active{transform:translate(2px,2px);box-shadow:none;}
+.cfg .save:disabled{background:#e1e4eb;color:#9299aa;border-color:#b6bdcc;cursor:not-allowed;
+  box-shadow:none;transform:none;}
 .cfg .tip{font-size:10.5px;color:var(--muted);line-height:15px;}
 .cfg .loginlink{color:var(--blue-d);font-size:11px;font-weight:700;text-decoration:none;}
 .cfg .loginlink:hover{text-decoration:underline;}
@@ -869,11 +871,14 @@
             return r.json()
           }
 
+          let treeRevision = 0
           const paintTree = async () => {
+            const revision = ++treeRevision
             let d = null
             try {
               d = await (await fetch(API + '/tree', { credentials: 'same-origin', cache: 'no-store' })).json()
             } catch { d = null }
+            if (revision !== treeRevision) return
             treeBox.textContent = ''
             if (!d || !d.ok) { treeMsg.textContent = '读不到轴树'; return }
 
@@ -904,29 +909,42 @@
               const line = el('div', 'ced')
               line.appendChild(el('div', 'lbl', ax + (node.builtin ? '' : '（自己建的）')))
               const chips = el('div', 'chips2')
-              if (!(node.subs || []).length) chips.appendChild(el('span', 'tip', '还没有子簇'))
-              for (const sub of node.subs || []) {
-                const c = el('span', 'chip2', sub.name)
-                c.title = (sub.terms || []).join(' / ')
-                if (sub.mine) {
-                  const x = el('i', 'x', '×')
-                  x.onclick = async () => {
-                    await treeApi({ axis: ax, action: 'delSub', name: sub.name })
-                    if (treeOpen) paintTree()
+              const paintSubs = () => {
+                chips.textContent = ''
+                if (!(node.subs || []).length) chips.appendChild(el('span', 'tip', '还没有子簇'))
+                for (const sub of node.subs || []) {
+                  const c = el('span', 'chip2', sub.name)
+                  c.title = (sub.terms || []).join(' / ')
+                  if (sub.mine) {
+                    const x = el('i', 'x', '×')
+                    x.onclick = async () => {
+                      try {
+                        const result = await treeApi({ axis: ax, action: 'delSub', name: sub.name })
+                        if (!result.ok) throw new Error(result.error || '删除失败')
+                        node.subs = node.subs.filter((it) => it.name !== sub.name)
+                        paintSubs()
+                      } catch { treeMsg.textContent = `删除「${sub.name}」失败，请重试` }
+                    }
+                    c.appendChild(x)
                   }
-                  c.appendChild(x)
+                  chips.appendChild(c)
                 }
-                chips.appendChild(c)
               }
+              paintSubs()
               const sug = el('button', 'save', '看建议')
+              const suggestions = el('div', 'ced')
               sug.type = 'button'
               sug.title = '先从池子里挖，再让模型筛一遍（约 ¥0.002）'
               sug.onclick = async () => {
+                if (sug.disabled) return
                 sug.disabled = true
                 sug.textContent = '挖…'
+                // 每次请求替换本轴的结果，空结果或失败也不会留下上次的建议。
+                suggestions.textContent = ''
                 try {
                   const r = await fetch(API + '/tree/suggest?axis=' + encodeURIComponent(ax) + '&review=1', { credentials: 'same-origin', cache: 'no-store' })
                   const sd = await r.json()
+                  if (revision !== treeRevision) return
                   if (!sd.ok) { treeMsg.textContent = sd.error || '没有建议'; return }
                   const out = el('div', 'chips2')
                   if (!sd.clusters || !sd.clusters.length) {
@@ -941,23 +959,41 @@
                     b.type = 'button'
                     b.title = (c.why ? c.why + ' ｜ ' : '') + (c.terms || []).join(' / ')
                     b.onclick = async () => {
-                      await treeApi({ axis: ax, action: 'addSub', name: c.name, terms: c.terms })
-                      treeMsg.textContent = `给「${ax}」加上子簇「${c.name}」`
-                      paintTree()
+                      if (b.disabled) return
+                      b.disabled = true
+                      const label = b.textContent
+                      b.textContent = '添加中…'
+                      try {
+                        const result = await treeApi({ axis: ax, action: 'addSub', name: c.name, terms: c.terms })
+                        if (!result.ok) throw new Error(result.error || '添加失败')
+                        const name = String(c.name).trim().slice(0, 24)
+                        const saved = result.nodes?.[ax]?.subs?.find((it) => it.name === name)
+                        node.subs = [...(node.subs || []).filter((it) => it.name !== name),
+                          { name, terms: saved?.terms || c.terms || [], mine: true }]
+                        paintSubs()
+                        b.textContent = `已添加 · ${name}`
+                        treeMsg.textContent = `给「${ax}」加上子簇「${name}」，可以继续添加其他建议`
+                      } catch {
+                        b.disabled = false
+                        b.textContent = label
+                        treeMsg.textContent = `添加「${c.name}」失败，请重试`
+                      }
                     }
                     out.appendChild(b)
                   }
                   if (sd.dropped && sd.dropped.length) {
                     const d = el('div', 'tip', '模型否掉的：' + sd.dropped.map((x) => `${x.seed}（${x.why}）`).join('；'))
-                    line.appendChild(d)
+                    suggestions.appendChild(d)
                   }
-                  line.appendChild(out)
+                  suggestions.appendChild(out)
+                } catch {
+                  if (revision === treeRevision) treeMsg.textContent = `${ax}：获取建议失败，请重试`
                 } finally {
                   sug.disabled = false
                   sug.textContent = '看建议'
                 }
               }
-              line.append(chips, sug)
+              line.append(chips, sug, suggestions)
               treeBox.appendChild(line)
             }
           }
