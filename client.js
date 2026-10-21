@@ -23,6 +23,8 @@
       const WALK = [ART + '?f=walk-a', ART + '?f=walk-b']
       /** 底部小人当前摆哪个姿势：点一次「更多」换一个 */
       let poseIdx = 0
+      /** 「轴的细分（子簇）」那一节是否展开：默认收起，切页签后保持 */
+      let treeOpen = false
 
       /**
        * 日志 detail 说人话。
@@ -1261,6 +1263,17 @@
 
         function render() {
           bd.textContent = ''
+          try {
+            renderInner()
+          } catch (e) {
+            // 一处异常别让整个页签白屏：把错误摆出来，至少知道坏了什么
+            bd.textContent = ''
+            msg('这块渲染出错了：' + (e && e.message ? e.message : String(e)))
+            try { console.error('[bili-jar] render', e) } catch { /* 无控制台 */ }
+          }
+        }
+
+        function renderInner() {
           if (tab === 'cfg') { renderCfg(); return }
           if (loading) {
             // 装罐时让她走两步（两帧来回切）
