@@ -517,7 +517,10 @@ export function apply(ctx, config) {
     /* ── 插画（豆包画的那三张）───────────────────────────────────────── */
     if (req.method === 'GET' && p === '/art') {
       const f = String(url.searchParams.get('f') || 'closed')
-      const map = { closed: 'jar-closed.png', active: 'jar-active.png', face: 'face.png' }
+      const map = {
+        closed: 'jar-closed.png', active: 'jar-active.png', face: 'face.png',
+        'walk-a': 'walk-a.png', 'walk-b': 'walk-b.png',
+      }
       const file = map[f]
       if (!file) return sendJson(res, 404, { ok: false, error: '没有这张图' })
       try {

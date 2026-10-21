@@ -20,6 +20,9 @@
     factory: () => {
       const API = '/api/bili-jar'
       const ART = API + '/art'
+      const WALK = [ART + '?f=walk-a', ART + '?f=walk-b']
+      /** 底部小人当前摆哪个姿势：点一次「更多」换一个 */
+      let poseIdx = 0
 
       /**
        * 日志 detail 说人话。
@@ -103,6 +106,19 @@
 .bd{overflow:auto;padding:2px 12px 12px;display:flex;flex-direction:column;gap:10px;flex:1;}
 .bd::-webkit-scrollbar{width:6px;}
 .bd::-webkit-scrollbar-thumb{background:#d3ddff;border-radius:6px;}
+
+/* 装罐时的走路小人（两帧来回切） */
+.walker{position:relative;width:84px;height:84px;margin:4px auto 2px;}
+.walker img{position:absolute;left:0;bottom:0;width:100%;height:100%;object-fit:contain;
+  animation:walkA .52s steps(1,end) infinite;}
+.walker img:nth-child(2){animation-name:walkB;}
+@keyframes walkA{0%,49.9%{opacity:1}50%,100%{opacity:0}}
+@keyframes walkB{0%,49.9%{opacity:0}50%,100%{opacity:1}}
+
+/* 列表最底下那个小人（点「更多」会换姿势） */
+.peek{display:flex;justify-content:center;padding:2px 0 6px;user-select:none;pointer-events:none;}
+.peek img{width:64px;height:64px;object-fit:contain;opacity:.92;
+  filter:drop-shadow(0 3px 4px rgba(30,42,99,.22));}
 
 /* ── 卡片 ─────────────────────────────────────────────────── */
 .item{border:2px solid var(--ink);border-radius:14px;padding:11px 12px;background:var(--paper2);
@@ -460,6 +476,7 @@
               return
             }
             if (d.main) feed = { ...feed, main: d.main }
+            poseIdx += 1   // 底部小人换个姿势
             const n = (d.main || []).length
             badge.textContent = String(n)
             badge.hidden = n === 0
@@ -1061,7 +1078,19 @@
         function render() {
           bd.textContent = ''
           if (tab === 'cfg') { renderCfg(); return }
-          if (loading) { msg('正在装罐…（十几秒）'); return }
+          if (loading) {
+            // 装罐时让她走两步（两帧来回切）
+            const walker = el('div', 'walker')
+            for (const src of WALK) {
+              const im = document.createElement('img')
+              im.src = src
+              im.alt = ''
+              walker.appendChild(im)
+            }
+            bd.appendChild(walker)
+            msg('正在装罐…（十几秒）')
+            return
+          }
 
           if (tab === 'later') {
             if (!later.length) { msg('待看是空的。看到感兴趣的但没空看，就点「稍后看」。'); return }
@@ -1089,6 +1118,16 @@
               bd.appendChild(moreAnchor)
             }
             bd.appendChild(card(it))
+          }
+
+          // 列表最底下的小人：点「更多电子榨菜」会换个姿势
+          if (tab === 'main' && list.length) {
+            const peek = el('div', 'peek')
+            const p = document.createElement('img')
+            p.src = WALK[poseIdx % WALK.length]
+            p.alt = ''
+            peek.appendChild(p)
+            bd.appendChild(peek)
           }
 
           const missing = feed.coverage?.missing || []
