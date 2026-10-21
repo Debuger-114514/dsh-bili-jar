@@ -765,6 +765,84 @@
           box.appendChild(chipEditor('axes', '兴趣轴（回车加，× 删）', '例如 数码'))
           box.appendChild(chipEditor('ups', '固定关注的 UP（UID 或名字）', '例如 江平舟'))
 
+          // ---- 轴的细分（子簇）：决定每小时轮换的搜索词 ----
+          const treeWrap = el('div', 'ced')
+          treeWrap.appendChild(el('div', 'lbl', '轴的细分（子簇，轮换搜索用；没有子簇也能跑）'))
+          const treeBox = el('div', 'ced')
+          const treeMsg = el('div', 'tip', '自带的删不掉；「看建议」是从你池子里的 tag 挖出来的，点了才生效')
+          treeWrap.append(treeBox, treeMsg)
+          box.appendChild(treeWrap)
+
+          const treeApi = async (body) => {
+            const r = await fetch(API + '/tree', {
+              method: 'POST', credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+            return r.json()
+          }
+
+          const paintTree = async () => {
+            let d = null
+            try {
+              d = await (await fetch(API + '/tree', { credentials: 'same-origin', cache: 'no-store' })).json()
+            } catch { d = null }
+            treeBox.textContent = ''
+            if (!d || !d.ok) { treeMsg.textContent = '读不到轴树'; return }
+            for (const ax of (cfgDraft.axes || [])) {
+              const node = (d.nodes && d.nodes[ax]) || { subs: [] }
+              const line = el('div', 'ced')
+              line.appendChild(el('div', 'lbl', ax + (node.builtin ? '' : '（自己建的）')))
+              const chips = el('div', 'chips2')
+              if (!(node.subs || []).length) chips.appendChild(el('span', 'tip', '还没有子簇'))
+              for (const sub of node.subs || []) {
+                const c = el('span', 'chip2', sub.name)
+                c.title = (sub.terms || []).join(' / ')
+                if (sub.mine) {
+                  const x = el('i', 'x', '×')
+                  x.onclick = async () => {
+                    await treeApi({ axis: ax, action: 'delSub', name: sub.name })
+                    paintTree()
+                  }
+                  c.appendChild(x)
+                }
+                chips.appendChild(c)
+              }
+              const sug = el('button', 'save', '看建议')
+              sug.type = 'button'
+              sug.onclick = async () => {
+                sug.disabled = true
+                sug.textContent = '挖…'
+                try {
+                  const r = await fetch(API + '/tree/suggest?axis=' + encodeURIComponent(ax), { credentials: 'same-origin', cache: 'no-store' })
+                  const sd = await r.json()
+                  if (!sd.ok) { treeMsg.textContent = sd.error || '没有建议'; return }
+                  if (!sd.clusters || !sd.clusters.length) { treeMsg.textContent = `${ax}：没有够格的建议`; return }
+                  treeMsg.textContent = ''
+                  const out = el('div', 'chips2')
+                  for (const c of sd.clusters) {
+                    const b = el('button', 'save', `＋ ${c.name}（${c.df} 条）`)
+                    b.type = 'button'
+                    b.title = c.terms.join(' / ')
+                    b.onclick = async () => {
+                      await treeApi({ axis: ax, action: 'addSub', name: c.name, terms: c.terms })
+                      treeMsg.textContent = `给「${ax}」加上子簇「${c.name}」`
+                      paintTree()
+                    }
+                    out.appendChild(b)
+                  }
+                  line.appendChild(out)
+                } finally {
+                  sug.disabled = false
+                  sug.textContent = '看建议'
+                }
+              }
+              line.append(chips, sug)
+              treeBox.appendChild(line)
+            }
+          }
+          paintTree()
+
           // ---- 头像 ----
           const avWrap = el('div', 'ced')
           avWrap.appendChild(el('div', 'lbl', '头像（推荐理由旁边那只）'))

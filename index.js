@@ -16,7 +16,8 @@ import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
-import { buildPool, toCard } from './lib/pool.mjs'
+import { buildPool, toCard, axisSim } from './lib/pool.mjs'
+import { AXIS_TREE, setUserTree, getUserTree, nodeFor, suggestSubs } from './lib/tree.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage, migrateUsage } from './lib/usage.mjs'
 import { writeStateDoc } from './lib/statefile.mjs'
@@ -215,6 +216,7 @@ export function apply(ctx, config) {
   // 重启会清掉内存里的池子/片单，磁盘上的 json 又没人愿意翻 —— 所以每次启动
   // 和每轮刷新之后，顺手写一份人眼能看的 STATE.md
   const refreshStateDoc = () => { try { writeStateDoc(stateDir) } catch { /* 写不出来不影响主流程 */ } }
+  const treeFile = join(stateDir, 'axis-tree.json')
   const usageFile = join(stateDir, 'usage.json')
   setUsageFile(usageFile)
   try {
@@ -239,6 +241,15 @@ export function apply(ctx, config) {
   let overrides = readJson(overridesFile, {})
   let building = null
   let explaining = null
+
+  /** 用户自己长出来的枝：启动时读进来，之后每次改动都落盘 */
+  let userTree = (() => {
+    try { return JSON.parse(readFileSync(treeFile, 'utf8')) } catch { return {} }
+  })()
+  setUserTree(userTree)
+  const saveUserTree = () => {
+    try { writeFileSync(treeFile, JSON.stringify(userTree, null, 2), 'utf8') } catch (e) { logWarn('tree:save', String(e?.message ?? e)) }
+  }
 
   let rowCache = { at: 0, row: null }
   function settingsRow(fresh = false) {
@@ -534,6 +545,67 @@ export function apply(ctx, config) {
       for (const [k, v] of Object.entries(body)) if (allow.includes(k)) overrides[k] = v
       try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch (e) { log(`配置落盘失败：${e?.message ?? e}`) }
       return sendJson(res, 200, { ok: true, config: cfgNow(), overrides })
+    }
+
+    /* ── 轴树：内置的那棵 + 你自己长出来的枝 ──────────────────────────── */
+    if (req.method === 'GET' && p === '/tree') {
+      const axes = Array.from(new Set([
+        ...Object.keys(AXIS_TREE), ...Object.keys(getUserTree() || {}), ...cfgNow().axes,
+      ]))
+      const nodes = {}
+      for (const ax of axes) {
+        const n = nodeFor(ax)
+        const mine = new Set(((getUserTree()[ax] || {}).subs || []).map((s) => s.name))
+        nodes[ax] = {
+          builtin: Boolean(AXIS_TREE[ax]),
+          search: n.search || [],
+          subs: (n.subs || []).map((s) => ({ name: s.name, terms: s.terms || [], mine: mine.has(s.name) })),
+        }
+      }
+      return sendJson(res, 200, { ok: true, nodes })
+    }
+
+    if (req.method === 'POST' && p === '/tree') {
+      const body = await readBody(req)
+      const axis = String(body?.axis || '').trim()
+      if (!axis) return sendJson(res, 400, { ok: false, error: '缺 axis' })
+      const action = String(body?.action || 'addSub')
+      const node = { ...((getUserTree() || {})[axis] || {}) }
+      node.subs = [...(node.subs || [])]
+
+      if (action === 'addSub') {
+        const name = String(body?.name || '').trim().slice(0, 24)
+        const terms = (Array.isArray(body?.terms) ? body.terms : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8)
+        if (!name || !terms.length) return sendJson(res, 400, { ok: false, error: '子簇要名字和词' })
+        const i = node.subs.findIndex((x) => x.name === name)
+        if (i >= 0) node.subs[i] = { name, terms: Array.from(new Set([...(node.subs[i].terms || []), ...terms])) }
+        else node.subs.push({ name, terms })
+      } else if (action === 'delSub') {
+        const name = String(body?.name || '').trim()
+        node.subs = node.subs.filter((x) => x.name !== name)
+      } else if (action === 'addSearch') {
+        const word = String(body?.word || '').trim()
+        if (!word) return sendJson(res, 400, { ok: false, error: '缺 word' })
+        node.search = Array.from(new Set([...(node.search || []), word]))
+      } else {
+        return sendJson(res, 400, { ok: false, error: `不认识的动作：${action}` })
+      }
+
+      userTree = { ...userTree, [axis]: node }
+      setUserTree(userTree)
+      saveUserTree()
+      logInfo('tree:edit', `${axis} ${action} ${body?.name || body?.word || ''}`)
+      return sendJson(res, 200, { ok: true, nodes: { [axis]: { search: nodeFor(axis).search || [], subs: nodeFor(axis).subs || [] } } })
+    }
+
+    /** 从现有池子里挖子簇建议（tag 的 DF + 两两共现 PMI），挖出来不自动采纳 */
+    if (req.method === 'GET' && p === '/tree/suggest') {
+      const axis = String(url.searchParams.get('axis') || '').trim()
+      if (!axis) return sendJson(res, 400, { ok: false, error: '缺 axis' })
+      const items = (prevPool && prevPool.length) ? prevPool : (feedCache?.pool || [])
+      if (!items.length) return sendJson(res, 200, { ok: false, error: '池子是空的，先刷一轮' })
+      const sg = suggestSubs(items, axis, axisSim, { maxClusters: 4, minDf: 3 })
+      return sendJson(res, 200, { ok: true, ...sg })
     }
 
     /* ── 语气预设：存的是"说话什么样"，不是整套配置 ──────────────────
