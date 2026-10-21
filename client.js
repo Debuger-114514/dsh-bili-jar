@@ -537,6 +537,9 @@
             msg('还没装上东西。点下面「换一批」开始。')
             return
           }
+          if (tab === 'main' && feed.curated === false) {
+            msg('模型没挑成（' + String(feed.curatorNote || '未知原因') + '），下面是规则片单')
+          }
 
           const list = tab === 'main' ? (feed.main || []) : (feed.up || [])
           if (!list.length) {

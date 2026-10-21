@@ -17,7 +17,7 @@ import { homedir } from 'node:os'
 import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
 import { buildPool } from './lib/pool.mjs'
-import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile } from './lib/reasons.mjs'
+import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage } from './lib/usage.mjs'
 import { curate } from './lib/curator.mjs'
 
@@ -302,17 +302,18 @@ export function apply(ctx, config) {
     }
 
     if (req.method === 'GET' && p === '/debug') {
-      let rows = []
-      try { rows = ctx.settings?.describe?.() || [] } catch (e) { rows = String(e?.message ?? e) }
+      const safe = (fn, dflt) => { try { return fn() } catch (e) { return `ERR: ${e?.message ?? e}` } }
+      let rows = safe(() => ctx.settings?.describe?.() || [], [])
       return sendJson(res, 200, {
         ok: true,
-        rowFound: Boolean(settingsRow(true)),
-        rowsCount: Array.isArray(rows) ? rows.length : rows,
-        configDump: inspect(config, { depth: 1, breakLength: 120 }).slice(0, 600),
+        rowFound: Boolean(safe(() => settingsRow(true), null)),
+        rowsCount: Array.isArray(rows) ? rows.length : String(rows).slice(0, 120),
         cfg: cfgNow(),
         overrides,
         poolSize: prevPool.length,
-        llm: Boolean(ctx.llm || ctx.get?.('llm')),
+        llm: Boolean(safe(() => ctx.llm || ctx.get?.('llm'), null)),
+        llmError: llmError.msg,
+        usage: todayUsage(usageFile),
       })
     }
 
