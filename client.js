@@ -25,6 +25,7 @@
       let poseIdx = 0
       /** 「轴的细分（子簇）」那一节是否展开：默认收起，切页签后保持 */
       let treeOpen = false
+      let presetsOpen = false
 
       /**
        * 日志 detail 说人话。
@@ -841,14 +842,30 @@
             return wrap
           }
           box.appendChild(chipEditor('axes', '兴趣轴（回车加，× 删）', '例如 数码'))
-          box.appendChild(chipEditor('ups', '固定关注的 UP（UID 或名字）', '例如 江平舟'))
+          // 内置分区与子簇分开，放在兴趣轴编辑器下方。
+          const presetsWrap = el('div', 'ced')
+          const presetsHead = el('button', 'fold', '内置分区')
+          presetsHead.type = 'button'
+          const presetsBody = el('div', 'foldbody')
+          const presetsBox = el('div', 'chips2')
+          presetsBody.append(el('div', 'tip', '点一下加进兴趣轴，带现成的子簇'), presetsBox)
+          presetsBody.hidden = !presetsOpen
+          if (presetsOpen) presetsHead.dataset.open = '1'
+          presetsHead.onclick = () => {
+            presetsOpen = !presetsOpen
+            presetsBody.hidden = !presetsOpen
+            if (presetsOpen) presetsHead.dataset.open = '1'
+            else delete presetsHead.dataset.open
+          }
+          presetsWrap.append(presetsHead, presetsBody)
+          box.appendChild(presetsWrap)
 
           // ---- 轴的细分（子簇）：决定每小时轮换的搜索词 ----
           const treeWrap = el('div', 'ced')
           const treeHead = el('button', 'fold', '轴的细分（子簇）')
           treeHead.type = 'button'
           const treeBox = el('div', 'ced')
-          const treeMsg = el('div', 'tip', '自带的删不掉；「看建议」先从池子里挖，再让模型筛一遍（约 ¥0.002）')
+          const treeMsg = el('div', 'tip', '自带的子簇删不掉；「看建议」先用本地规则找候选，有候选才调用模型筛选')
           const treeBody = el('div', 'foldbody')
           treeBody.append(treeBox, treeMsg)
           // 默认收起：这块又长又不常用，展开状态在本次会话里记住
@@ -861,6 +878,7 @@
           }
           treeWrap.append(treeHead, treeBody)
           box.appendChild(treeWrap)
+          box.appendChild(chipEditor('ups', '固定关注的 UP（UID 或名字）', '例如 江平舟'))
 
           const treeApi = async (body) => {
             const r = await fetch(API + '/tree', {
@@ -882,26 +900,18 @@
             treeBox.textContent = ''
             if (!d || !d.ok) { treeMsg.textContent = '读不到轴树'; return }
 
-            // 出厂就有的分区：点一下直接加进兴趣轴（名字不用自己想）
+            presetsBox.textContent = ''
             const have = new Set(cfgDraft.axes || [])
-            const spare = (d.presets || []).filter((n) => !have.has(n)).slice(0, 14)
-            if (spare.length) {
-              const box2 = el('div', 'ced')
-              box2.appendChild(el('div', 'tip', '内置分区（点一下加进兴趣轴，带现成的子簇）'))
-              const chips2 = el('div', 'chips2')
-              for (const name of spare) {
-                const b = el('button', 'save', '＋ ' + name)
-                b.type = 'button'
-                b.onclick = async () => {
-                  const axes = [...(cfgDraft.axes || []), name]
-                  cfgDraft.axes = axes
-                  await saveConfig({ axes })
-                  render()
-                }
-                chips2.appendChild(b)
+            const spare = (d.presets || []).filter((n) => !have.has(n))
+            if (!spare.length) presetsBox.appendChild(el('span', 'tip', '内置分区已全部添加'))
+            for (const name of spare) {
+              const b = el('button', 'save', '＋ ' + name)
+              b.type = 'button'
+              b.onclick = async () => {
+                const axes = [...new Set([...(cfgDraft.axes || []), name])]
+                if (await saveConfig({ axes })) render()
               }
-              box2.appendChild(chips2)
-              treeBox.appendChild(box2)
+              presetsBox.appendChild(b)
             }
 
             for (const ax of (cfgDraft.axes || [])) {
@@ -909,6 +919,8 @@
               const line = el('div', 'ced')
               line.appendChild(el('div', 'lbl', ax + (node.builtin ? '' : '（自己建的）')))
               const chips = el('div', 'chips2')
+              const axisMsg = el('div', 'tip')
+              const suggestionButtons = new Map()
               const paintSubs = () => {
                 chips.textContent = ''
                 if (!(node.subs || []).length) chips.appendChild(el('span', 'tip', '还没有子簇'))
@@ -923,7 +935,13 @@
                         if (!result.ok) throw new Error(result.error || '删除失败')
                         node.subs = node.subs.filter((it) => it.name !== sub.name)
                         paintSubs()
-                      } catch { treeMsg.textContent = `删除「${sub.name}」失败，请重试` }
+                        const option = suggestionButtons.get(sub.name)
+                        if (option) {
+                          option.button.disabled = false
+                          option.button.textContent = option.label
+                        }
+                        axisMsg.textContent = `已删除「${sub.name}」，可从本轮建议重新添加`
+                      } catch { axisMsg.textContent = `删除「${sub.name}」失败，请重试` }
                     }
                     c.appendChild(x)
                   }
@@ -934,28 +952,33 @@
               const sug = el('button', 'save', '看建议')
               const suggestions = el('div', 'ced')
               sug.type = 'button'
-              sug.title = '先从池子里挖，再让模型筛一遍（约 ¥0.002）'
+              sug.title = '本地没有候选时不调用模型；有候选才请求模型筛选'
               sug.onclick = async () => {
                 if (sug.disabled) return
                 sug.disabled = true
                 sug.textContent = '挖…'
                 // 每次请求替换本轴的结果，空结果或失败也不会留下上次的建议。
                 suggestions.textContent = ''
+                suggestionButtons.clear()
+                axisMsg.textContent = '正在查找并筛选建议…'
                 try {
                   const r = await fetch(API + '/tree/suggest?axis=' + encodeURIComponent(ax) + '&review=1', { credentials: 'same-origin', cache: 'no-store' })
                   const sd = await r.json()
                   if (revision !== treeRevision) return
-                  if (!sd.ok) { treeMsg.textContent = sd.error || '没有建议'; return }
+                  if (!sd.ok) { axisMsg.textContent = sd.error || '没有建议'; return }
                   const out = el('div', 'chips2')
                   if (!sd.clusters || !sd.clusters.length) {
                     // 模型把候选都否了 —— 把它的理由摊开，比只说"没有"有用
                     const why = (sd.dropped || []).map((d) => `${d.seed}：${d.why}`).join('；')
-                    treeMsg.textContent = why ? `${ax}：都没留下 —— ${why}` : `${ax}：没有够格的建议`
+                    axisMsg.textContent = why ? `${ax}：都没留下 —— ${why}` : `${ax}：没有够格的建议`
                     return
                   }
-                  treeMsg.textContent = sd.reviewed ? '模型筛过一遍了，点一个加进去' : (sd.reviewNote || '')
+                  axisMsg.textContent = sd.reviewed ? '模型筛过一遍了，点一个加进去' : (sd.reviewNote || '')
                   for (const c of sd.clusters) {
+                    const optionName = String(c.name).trim().slice(0, 24)
+                    if (suggestionButtons.has(optionName)) continue
                     const b = el('button', 'save', `＋ ${c.name}（${c.df} 条）`)
+                    suggestionButtons.set(optionName, { button: b, label: b.textContent })
                     b.type = 'button'
                     b.title = (c.why ? c.why + ' ｜ ' : '') + (c.terms || []).join(' / ')
                     b.onclick = async () => {
@@ -972,11 +995,11 @@
                           { name, terms: saved?.terms || c.terms || [], mine: true }]
                         paintSubs()
                         b.textContent = `已添加 · ${name}`
-                        treeMsg.textContent = `给「${ax}」加上子簇「${name}」，可以继续添加其他建议`
+                        axisMsg.textContent = `给「${ax}」加上子簇「${name}」，可以继续添加其他建议`
                       } catch {
                         b.disabled = false
                         b.textContent = label
-                        treeMsg.textContent = `添加「${c.name}」失败，请重试`
+                        axisMsg.textContent = `添加「${c.name}」失败，请重试`
                       }
                     }
                     out.appendChild(b)
@@ -987,13 +1010,13 @@
                   }
                   suggestions.appendChild(out)
                 } catch {
-                  if (revision === treeRevision) treeMsg.textContent = `${ax}：获取建议失败，请重试`
+                  if (revision === treeRevision) axisMsg.textContent = `${ax}：获取建议失败，请重试`
                 } finally {
                   sug.disabled = false
                   sug.textContent = '看建议'
                 }
               }
-              line.append(chips, sug, suggestions)
+              line.append(chips, sug, suggestions, axisMsg)
               treeBox.appendChild(line)
             }
           }

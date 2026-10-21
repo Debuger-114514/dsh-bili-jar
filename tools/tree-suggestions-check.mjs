@@ -35,7 +35,7 @@ const deferred = () => {
   return { promise, resolve }
 }
 
-async function mount() {
+async function mount(overrides = {}) {
   const body = new Element('body')
   const document = { body, createElement: (tag) => new Element(tag), addEventListener() {}, removeEventListener() {} }
   const state = {
@@ -43,6 +43,7 @@ async function mount() {
     tree: async () => ({ ok: true, nodes: { 科技: { subs: [] }, 游戏: { subs: [] } } }),
     edit: async () => ({ ok: true }),
   }
+  Object.assign(state, overrides)
   let plugin
   const context = {
     document, console, setTimeout, clearTimeout,
@@ -52,7 +53,7 @@ async function mount() {
     fetch: async (url, options = {}) => {
       let data
       if (url.endsWith('/state')) data = { config: { axes: ['科技', '游戏'] } }
-      else if (url.includes('/tree/suggest?')) data = await state.suggestion()
+      else if (url.includes('/tree/suggest?')) data = await state.suggestion(url)
       else if (url.endsWith('/tree')) data = options.method === 'POST'
         ? await state.edit(JSON.parse(options.body)) : await state.tree()
       else data = { ok: true }
@@ -170,4 +171,51 @@ test('树重绘后丢弃旧建议响应，乱序树响应不能覆盖新树', as
   await settle()
   assert.equal(ui.buttons('＋ 最新分区').length, 1)
   assert.equal(ui.buttons('＋ 过期分区').length, 0)
+})
+
+test('内置分区独立折叠，紧邻兴趣轴编辑器，不在子簇栏内', async () => {
+  const ui = await mount({ tree: async () => ({ ok: true, presets: ['音乐'], nodes: {} }) })
+  const head = ui.buttons('内置分区')[0]
+  const wrap = head.parent
+  const siblings = wrap.parent.children
+  const index = siblings.indexOf(wrap)
+  assert.ok(siblings[index - 1].textContent.startsWith('兴趣轴（回车加，× 删）'))
+  assert.equal(wrap.children[1].hidden, true)
+  await head.click()
+  assert.equal(wrap.children[1].hidden, false)
+  assert.equal(ui.buttons('＋ 音乐')[0].parent.parent.parent, wrap)
+  const treeWrap = ui.buttons('轴的细分（子簇）')[0].parent
+  assert.notEqual(wrap, treeWrap)
+})
+
+test('各轴反馈位于本轴内，另一轴的请求不会覆盖已有反馈', async () => {
+  const ui = await mount({ suggestion: async () => ({ ok: true, clusters: [] }) })
+  const buttons = ui.buttons('看建议')
+  await buttons[0].click()
+  const first = buttons[0].parent
+  assert.ok(first.textContent.includes('科技：没有够格的建议'))
+  assert.ok(!buttons[1].parent.textContent.includes('科技：没有够格的建议'))
+  ui.state.suggestion = async () => ({ ok: false, error: '游戏轴失败' })
+  await buttons[1].click()
+  assert.ok(buttons[1].parent.textContent.includes('游戏轴失败'))
+  assert.ok(first.textContent.includes('科技：没有够格的建议'))
+})
+
+test('删除刚添加的子簇后恢复原建议，无需再次筛选即可添加', async () => {
+  let requests = 0
+  const ui = await mount({ suggestion: async () => {
+    requests++
+    return { ok: true, clusters: [{ name: '电脑', df: 3, terms: ['电脑'] }] }
+  } })
+  await ui.buttons('看建议')[0].click()
+  const option = ui.buttons('＋ 电脑（3 条）')[0]
+  await option.click()
+  const chip = ui.all().find((it) => it.className === 'chip2' && it.textContent === '电脑×')
+  await chip.children[0].click()
+  assert.equal(option.disabled, false)
+  assert.equal(option.textContent, '＋ 电脑（3 条）')
+  await option.click()
+  assert.equal(option.disabled, true)
+  assert.equal(ui.buttons('已添加 · 电脑').length, 1)
+  assert.equal(requests, 1)
 })
