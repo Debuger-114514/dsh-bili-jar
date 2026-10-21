@@ -21,6 +21,7 @@ import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsag
 import { todayUsage } from './lib/usage.mjs'
 import { curate } from './lib/curator.mjs'
 import { adoptCookies, videoSubtitle, videoComments, loginStart, loginPoll, hasLogin } from './lib/bili.mjs'
+import { qrDataUrl } from './lib/qr.mjs'
 import { setLogFile, info as logInfo, warn as logWarn, tail as logTail } from './lib/log.mjs'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
@@ -482,8 +483,11 @@ export function apply(ctx, config) {
     // B站 扫码登录（插件自己的，不依赖 bili-scroll）
     if (req.method === 'GET' && p === '/login/start') {
       const r = await loginStart()
-      if (r.ok) logInfo('login:start', '已生成二维码')
-      else logWarn('login:start-fail', r.error || '')
+      if (r.ok) {
+        // 自己画码（见 lib/qr.mjs）：SVG 内联成 data URL，前端一个 <img> 就够
+        try { r.qr = qrDataUrl(r.url) } catch (e) { r.qrError = String(e?.message ?? e) }
+        logInfo('login:start', r.qr ? '已生成二维码（SVG）' : `出码但没画出来：${r.qrError || ''}`)
+      } else logWarn('login:start-fail', r.error || '')
       return sendJson(res, 200, r)
     }
 

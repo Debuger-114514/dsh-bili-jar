@@ -114,6 +114,9 @@
 .cfg .tip{font-size:10.5px;color:#6b7280;line-height:15px;}
 .cfg .loginlink{color:#93c5fd;font-size:11px;text-decoration:none;}
 .cfg .loginlink:hover{text-decoration:underline;}
+.cfg .qrbox{display:none;}
+.cfg .qrbox.on{display:flex;flex-direction:column;gap:4px;align-items:flex-start;}
+.cfg .qrbox img{width:132px;height:132px;border-radius:8px;background:#fff;padding:6px;}
 .cfg .ced{display:flex;flex-direction:column;gap:5px;}
 .chips2{display:flex;flex-wrap:wrap;gap:5px;align-items:center;}
 .chip2{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 7px;border-radius:6px;
@@ -560,7 +563,13 @@
           const loginStatus = el('div', 'tip', '检查中…')
           const loginBtn = el('button', 'save', '扫码登录')
           loginBtn.type = 'button'
-          loginWrap.append(loginBtn, loginStatus)
+          // 二维码：host 端自己编码成 SVG 的 data URL（lib/qr.mjs），这里只负责摆
+          const qrBox = el('div', 'qrbox')
+          const qrImg = el('img', '')
+          qrImg.alt = 'B站 登录二维码'
+          const qrTip = el('div', 'tip', '手机 B站 → 我的 → 扫一扫；确认时选「记住我」那张，不然明天还得重扫')
+          qrBox.append(qrImg, qrTip)
+          loginWrap.append(loginBtn, loginStatus, qrBox)
           box.appendChild(loginWrap)
 
           fetch(API + '/login/status', { credentials: 'same-origin', cache: 'no-store' })
@@ -576,17 +585,25 @@
               const d = await r.json()
               if (!d.ok) { loginStatus.textContent = '失败：' + (d.error || ''); loginBtn.disabled = false; return }
               loginStatus.textContent = ''
-              const a = el('a', 'loginlink', '用手机打开这个链接确认登录 →')
-              a.href = d.url
-              a.target = '_blank'
-              a.rel = 'noreferrer'
-              loginStatus.appendChild(a)
+              qrBox.classList.remove('on')
+              qrImg.removeAttribute('src')
+              if (d.qr) {
+                qrImg.src = d.qr
+                qrBox.classList.add('on')
+              } else {
+                // 编码器挂了的兜底：至少给个能点的链接
+                const a = el('a', 'loginlink', '二维码没画出来，点这里用手机打开确认登录 →')
+                a.href = d.url
+                a.target = '_blank'
+                a.rel = 'noreferrer'
+                loginStatus.appendChild(a)
+              }
               const tick = async () => {
                 try {
                   const pr = await fetch(API + '/login/poll?key=' + encodeURIComponent(d.key), { credentials: 'same-origin' })
                   const pd = await pr.json()
                   if (pd.state === 'ok') { loginStatus.textContent = '登录成功 ✓（凭证已存本机）'; loginBtn.disabled = false; return }
-                  if (pd.state === 'expired') { loginStatus.textContent = '二维码过期了，重新点一次'; loginBtn.disabled = false; return }
+                  if (pd.state === 'expired') { loginStatus.textContent = '二维码过期了，重新点一次'; qrBox.classList.remove('on'); loginBtn.disabled = false; return }
                   loginStatus.textContent = pd.state === 'scanned' ? '已扫码，手机上点确认' : '等待扫码…'
                 } catch { /* 网络抖一下继续轮询 */ }
                 setTimeout(tick, 2000)
