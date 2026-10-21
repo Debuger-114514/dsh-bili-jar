@@ -4,7 +4,7 @@
  * ⭐ client bundle 不是 ESM，是自注册脚本：
  *     window.__ModuleLoader__.load({ id: '<包名>', factory: () => ({ apply(ctx) {} }) })
  *
- * 三个页签：推荐 / 关注 / 待看。数据来自 `/api/bili-jar/feed`。
+ * 页签：推荐 / 关注 / 待看 / 历史 / 设置。数据来自 `/api/bili-jar`。
  * 罐子可拖动，位置记在 localStorage。
  * ============================================================================
  */
@@ -368,8 +368,9 @@
         const tabMain = el('button', null, '推荐')
         const tabUp = el('button', null, '关注')
         const tabLater = el('button', null, '待看')
+        const tabHistory = el('button', null, '历史')
         const tabCfg = el('button', null, '设置')
-        for (const t of [tabMain, tabUp, tabLater, tabCfg]) { t.type = 'button'; tabsEl.appendChild(t) }
+        for (const t of [tabMain, tabUp, tabLater, tabHistory, tabCfg]) { t.type = 'button'; tabsEl.appendChild(t) }
         tabMain.classList.add('on')
 
         const bd = el('div', 'bd')
@@ -463,10 +464,40 @@
         let tab = 'main'
         let loading = false
         let later = loadLater()
+        let history = []
+        let watchQueue = Promise.resolve()
+
+        function updateBadge() {
+          const n = feed?.main?.length || 0
+          badge.textContent = String(n)
+          badge.hidden = n === 0
+        }
+
+        function recordWatched(it) {
+          watchQueue = watchQueue.then(async () => {
+            try {
+              const res = await fetch(API + '/history', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ bvid: it.bvid, item: it }),
+              })
+              const data = await res.json()
+              if (!res.ok || !data.ok) throw new Error(data.error || '保存失败')
+              history = data.items
+              later = data.later
+              saveLater(later)
+              if (feed) feed = { ...feed, main: data.main, up: data.up }
+              updateBadge()
+              render()
+            } catch {
+              tsEl.textContent = '观看历史保存失败，请再次打开视频重试'
+            }
+          })
+        }
 
         const setTab = (t) => {
           tab = t
-          for (const [btn, key] of [[tabMain, 'main'], [tabUp, 'up'], [tabLater, 'later'], [tabCfg, 'cfg']]) {
+          for (const [btn, key] of [[tabMain, 'main'], [tabUp, 'up'], [tabLater, 'later'], [tabHistory, 'history'], [tabCfg, 'cfg']]) {
             btn.classList.toggle('on', key === t)
           }
           render()
@@ -474,6 +505,7 @@
         tabMain.addEventListener('click', () => setTab('main'))
         tabUp.addEventListener('click', () => setTab('up'))
         tabLater.addEventListener('click', () => setTab('later'))
+        tabHistory.addEventListener('click', () => { setTab('history'); syncHistory() })
         tabCfg.addEventListener('click', () => { setTab('cfg'); loadConfig() })
 
         refresh.addEventListener('click', () => openFeed(true))
@@ -499,9 +531,7 @@
             }
             if (d.main) feed = { ...feed, main: d.main }
             poseIdx += 1   // 底部小人换个姿势
-            const n = (d.main || []).length
-            badge.textContent = String(n)
-            badge.hidden = n === 0
+            updateBadge()
             tsEl.textContent = `又捞了 ${d.added?.length || 0} 条 · 池里还剩 ${d.left ?? '?'}`
             setTab('main')
           } catch {
@@ -529,6 +559,7 @@
         }
         function openMini(it) {
           closeMini()
+          recordWatched(it)
           const w = el('div', 'mini')
           const head = el('div', 'mini-hd')
           const tt = el('span', 'mini-tt', it.title || '')
@@ -578,12 +609,17 @@
           a.href = it.url
           a.target = '_blank'
           a.rel = 'noreferrer'
+          a.addEventListener('click', () => recordWatched(it))
+          a.addEventListener('auxclick', (e) => { if (e.button === 1) recordWatched(it) })
           t.appendChild(a)
           box.appendChild(t)
 
           const p = it.pct || {}
           const rate = (p.like != null) ? ` · 赞${p.like}% 币${p.coin}% 藏${p.fav}%` : ''
           box.appendChild(el('div', 'meta', `${it.author || ''} · ${fmtPlay(it.play)}播放 · ${fmtAgo(it.pubdate)}${rate}`))
+          if (tab === 'history' && it.watchedAt) {
+            box.appendChild(el('div', 'meta', '观看于 ' + new Date(it.watchedAt).toLocaleString('zh-CN')))
+          }
 
           const whyText = it.why || reasonsMap[it.bvid]
           if (whyText) {
@@ -627,7 +663,10 @@
           const acts = el('div', 'acts')
           const open = el('button', null, '打开')
           open.type = 'button'
-          open.addEventListener('click', () => window.open(it.url, '_blank', 'noopener'))
+          open.addEventListener('click', () => {
+            window.open(it.url, '_blank', 'noopener')
+            recordWatched(it)
+          })
           acts.appendChild(open)
 
           const miniBtn = el('button', null, '小窗')
@@ -686,7 +725,7 @@
           try {
             const res = await fetch(API + '/state', { credentials: 'same-origin', cache: 'no-store' })
             const data = await res.json()
-            cfgDraft = { ...(data.config || {}) }
+            cfgDraft = { ...(data.config || {}), apiKeyMasked: data.apiKeyMasked || '' }
             if (data.usage) cfgDraft.usage = data.usage
             if (tab === 'cfg') render()
           } catch { /* 读不到就空着 */ }
@@ -701,7 +740,7 @@
               body: JSON.stringify(patch),
             })
             const data = await res.json()
-            if (data.ok) cfgDraft = { ...(data.config || {}) }
+            if (data.ok) cfgDraft = { ...(data.config || {}), apiKeyMasked: data.apiKeyMasked || '' }
             return Boolean(data.ok)
           } catch { return false }
         }
@@ -1017,10 +1056,18 @@
             const wrap = el('div', 'ced')
             wrap.appendChild(el('div', 'lbl', label))
             const inp = el('input', 'ta1')
-            inp.value = cfgDraft[key] || ''
-            inp.placeholder = ph
+            const isKey = key === 'apiKey'
+            inp.type = isKey ? 'password' : 'text'
+            inp.value = isKey ? '' : (cfgDraft[key] || '')
+            inp.placeholder = isKey ? (cfgDraft.apiKeyMasked || ph) : ph
             inp.autocomplete = 'off'
-            inp.addEventListener('change', async () => { await saveConfig({ [key]: inp.value.trim() }) })
+            inp.addEventListener('change', async () => {
+              const ok = await saveConfig({ [key]: inp.value.trim() })
+              if (ok && isKey) {
+                inp.value = ''
+                inp.placeholder = cfgDraft.apiKeyMasked || ph
+              }
+            })
             wrap.appendChild(inp)
             return wrap
           }
@@ -1302,6 +1349,12 @@
 
         function renderInner() {
           if (tab === 'cfg') { renderCfg(); return }
+          if (tab === 'history') {
+            msg('打开视频即计入历史，保留最近 10 条。')
+            if (!history.length) { msg('还没有观看记录。'); return }
+            for (const it of history) bd.appendChild(card(it))
+            return
+          }
           if (loading) {
             // 装罐时让她走两步（两帧来回切）
             const walker = el('div', 'walker')
@@ -1368,13 +1421,12 @@
             const data = await res.json()
             if (!res.ok || data.ok === false) throw new Error(data?.error || ('HTTP ' + res.status))
             feed = data
-            const n = (data.main || []).length
-            badge.textContent = String(n)
-            badge.hidden = n === 0
+            updateBadge()
             const when = data.ts ? new Date(data.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
             tsEl.textContent = data.cached ? `${when} 的库存` : `刚装好 · ${Math.round((data.tookMs || 0) / 1000)}s`
             loadReasons()
             syncLater()
+            syncHistory()
           } catch (e) {
             feed = null
             tsEl.textContent = '失败'
@@ -1389,6 +1441,17 @@
         }
 
         render()
+
+        async function syncHistory() {
+          try {
+            const res = await fetch(API + '/history', { credentials: 'same-origin', cache: 'no-store' })
+            const data = await res.json()
+            if (res.ok && data.ok && Array.isArray(data.items)) {
+              history = data.items
+              if (tab === 'history') render()
+            }
+          } catch { /* 下次打开历史时重试 */ }
+        }
 
         /** 从后端同步「待看」（不再只靠 localStorage） */
         async function syncLater() {

@@ -128,6 +128,14 @@ function toStr(v) {
   return typeof x === 'string' ? x : ''
 }
 
+function maskKey(key) {
+  const value = String(key || '')
+  if (!value) return ''
+  // 短密钥不显示首尾，避免掩码暴露完整密钥。
+  if (value.length <= 10) return '••••••••••'
+  return `${value.slice(0, 5)}••••${value.slice(-5)}`
+}
+
 function stateDirOf(ctx) {
   let dir = ''
   try {
@@ -217,6 +225,7 @@ export function apply(ctx, config) {
   const overridesFile = join(stateDir, 'config.json')
   const feedbackFile = join(stateDir, 'feedback.jsonl')
   const laterFile = join(stateDir, 'later.json')
+  const historyFile = join(stateDir, 'history.json')
   // 重启会清掉内存里的池子/片单，磁盘上的 json 又没人愿意翻 —— 所以每次启动
   // 和每轮刷新之后，顺手写一份人眼能看的 STATE.md
   const refreshStateDoc = () => { try { writeStateDoc(stateDir) } catch { /* 写不出来不影响主流程 */ } }
@@ -238,6 +247,22 @@ export function apply(ctx, config) {
     const j = readJson(feedFile, null)
     return j && j.ts ? j : null
   })()
+  let history = readJson(historyFile, [])
+  history = Array.isArray(history) ? history.filter((it) => it?.bvid).slice(0, 10) : []
+  function withoutWatched(next) {
+    if (!next) return next
+    const watched = new Set([
+      ...history.map((it) => it.bvid),
+      ...(next.watchedBvids || []),
+      ...(feedCache?.ts === next.ts ? (feedCache?.watchedBvids || []) : []),
+    ])
+    const out = { ...next, watchedBvids: [...watched] }
+    for (const key of ['main', 'up', 'shortlist', 'pool']) {
+      if (Array.isArray(out[key])) out[key] = out[key].filter((it) => !watched.has(it.bvid))
+    }
+    return out
+  }
+  feedCache = withoutWatched(feedCache)
   let prevPool = readJson(poolFile, [])
   let lastShown = readJson(shownFile, [])
   let reasons = loadReasonCache(reasonsFile)
@@ -274,8 +299,10 @@ export function apply(ctx, config) {
     const c = (src && typeof src === 'object') ? src : {}
     const merged = { ...c, ...overrides }
     const axes = toArr(merged.axes)
+    // 空数组表示用户主动清空；只有未配置或无效值才回退默认兴趣轴。
+    const hasAxes = Array.isArray(unwrap(merged.axes)) || axes.length > 0
     return {
-      axes: axes.length ? axes : DEFAULTS.axes.slice(),
+      axes: hasAxes ? axes : DEFAULTS.axes.slice(),
       ups: toArr(merged.ups),
       fanMin: toNum(merged.fanMin, 0),
       fanMax: toNum(merged.fanMax, 0),
@@ -415,25 +442,25 @@ export function apply(ctx, config) {
         const t0 = Date.now()
         const cfg = cfgNow()
         maybeAdoptLogin(cfg)
-        const exclude = force ? lastShown : []
+        const exclude = [...new Set([...(force ? lastShown : []), ...history.map((it) => it.bvid)])]
         const aff = affinityOf()
         if (aff.ready) logInfo('affinity:on', `${aff.total} 条赞踩参与打分`)
         const r = await buildPool({ ...cfg, exclude, affinity: aff }, (m) => log(m), prevPool)
         logInfo('feed:built', JSON.stringify(r.stats || {}))
         const out = { ...r, tookMs: Date.now() - t0, cached: false, excluded: exclude.length }
-        feedCache = out
+        feedCache = withoutWatched(out)
         lastShown = (r.main || []).map((c) => c.bvid)
         try { writeFileSync(shownFile, JSON.stringify(lastShown), 'utf8') } catch { /* 无所谓 */ }
         if (Array.isArray(r.pool)) {
           prevPool = r.pool
           try { writeFileSync(poolFile, JSON.stringify(prevPool), 'utf8') } catch (e) { log(`pool 落盘失败：${e?.message ?? e}`) }
         }
-        try { writeFileSync(feedFile, JSON.stringify(out), 'utf8') } catch (e) { log(`feed 落盘失败：${e?.message ?? e}`) }
+        try { writeFileSync(feedFile, JSON.stringify(feedCache), 'utf8') } catch (e) { log(`feed 落盘失败：${e?.message ?? e}`) }
         refreshStateDoc()
 
         // ⭐ 策展人：规则给候选，模型挑 5 条并写理由
         // ⭐ 内容源：额外把 bili-scroll 报告里挑过的视频并进候选
-        let shortlist = r.shortlist || []
+        let shortlist = feedCache.shortlist || []
         let seeded = 0
         if (cfg.contentSource === 'scroll' || cfg.contentSource === 'both') {
           const seeds = readScrollSeeds()
@@ -447,6 +474,7 @@ export function apply(ctx, config) {
           shortlist = cfg.contentSource === 'both' ? [...shortlist, ...add] : add.length ? add : shortlist
           if (seeded) logInfo('seed:scroll', `${seeded} 条 / 模式=${cfg.contentSource}`)
         }
+        shortlist = withoutWatched({ ts: out.ts, shortlist }).shortlist
 
         if (cfg.curatorOn && shortlist.length) {
           const t1 = Date.now()
@@ -458,7 +486,7 @@ export function apply(ctx, config) {
             const byBvid = new Map(shortlist.map((x) => [x.bvid, x]))
             const curated = c.picks.map((p, i) => ({ ...byBvid.get(p.bvid), why: p.why, rank: i + 1 }))
             const enriched = await enrichReasons(curated, cfg)
-            feedCache = { ...out, main: enriched, curated: true, curatorMs: Date.now() - t1 }
+            feedCache = withoutWatched({ ...out, main: enriched, curated: true, curatorMs: Date.now() - t1 })
             logInfo('curate:ok', `${curated.length} 条 / ${Date.now() - t1}ms`)
             for (const p of c.picks) reasons[p.bvid] = { text: p.why, at: Date.now() }
             saveReasonCache(reasonsFile, reasons)
@@ -468,11 +496,11 @@ export function apply(ctx, config) {
           }
           log(`策展失败，退回规则片单：${c.note}`)
           logWarn('curate:fail', String(c.note || '未知'))
-          feedCache = { ...out, curated: false, curatorNote: c.note }
+          feedCache = withoutWatched({ ...out, curated: false, curatorNote: c.note })
           refreshStateDoc()
           return feedCache
         }
-        return out
+        return feedCache
       } catch (e) {
         log(`建池失败：${e?.message ?? e}`)
         if (feedCache) return { ...feedCache, cached: true, error: String(e?.message ?? e) }
@@ -530,7 +558,7 @@ export function apply(ctx, config) {
       const c = cfgNow()
       const key = c.apiKey || ''
       // 🔒 永远不把完整 key 递到浏览器：只给掩码
-      const masked = key ? `sk-••••${key.slice(-4)}` : ''
+      const masked = maskKey(key)
       return sendJson(res, 200, {
         ok: true,
         stateDir,
@@ -549,7 +577,14 @@ export function apply(ctx, config) {
       const allow = Object.keys(DEFAULTS)
       for (const [k, v] of Object.entries(body)) if (allow.includes(k)) overrides[k] = v
       try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch (e) { log(`配置落盘失败：${e?.message ?? e}`) }
-      return sendJson(res, 200, { ok: true, config: cfgNow(), overrides })
+      const c = cfgNow()
+      return sendJson(res, 200, {
+        ok: true,
+        config: { ...c, apiKey: '' },
+        overrides: { ...overrides, apiKey: '' },
+        apiKeySet: Boolean(c.apiKey),
+        apiKeyMasked: maskKey(c.apiKey),
+      })
     }
 
     /* ── 轴树：内置的那棵 + 你自己长出来的枝 ──────────────────────────── */
@@ -752,7 +787,6 @@ export function apply(ctx, config) {
       let rows = safe(() => ctx.settings?.describe?.() || [], [])
       // 🔒 调试接口也不许把完整 key 递出去
       const dcfg = cfgNow()
-      const maskKey = (k) => (k ? `sk-••••${String(k).slice(-4)}` : '')
       const dOver = { ...overrides }
       if (dOver.apiKey !== undefined) dOver.apiKey = maskKey(dOver.apiKey)
       return sendJson(res, 200, {
@@ -819,6 +853,35 @@ export function apply(ctx, config) {
       return sendJson(res, 200, { ok: true, row })
     }
 
+    // 打开视频即记为已观看；历史只保留最近 10 条，同一视频再次打开时移到最前。
+    if (req.method === 'GET' && p === '/history') {
+      return sendJson(res, 200, { ok: true, items: history })
+    }
+    if (req.method === 'POST' && p === '/history') {
+      const body = await readBody(req)
+      const bvid = String(body?.bvid || '').trim()
+      if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) return sendJson(res, 400, { ok: false, error: '无效的 bvid' })
+      const savedLater = readJson(laterFile, [])
+      const item = [...(feedCache?.main || []), ...(feedCache?.up || []), ...savedLater, ...history]
+        .find((it) => it.bvid === bvid) || body.item || {}
+      const entry = { bvid, watchedAt: Date.now(), url: `https://www.bilibili.com/video/${bvid}` }
+      for (const key of ['title', 'author', 'durationText', 'play', 'pubdate', 'pct', 'why', 'reasons', 'tags']) {
+        if (item[key] !== undefined) entry[key] = item[key]
+      }
+      const nextHistory = [entry, ...history.filter((it) => it.bvid !== bvid)].slice(0, 10)
+      writeFileSync(historyFile, JSON.stringify(nextHistory), 'utf8')
+      history = nextHistory
+      feedCache = withoutWatched(feedCache)
+      if (feedCache) writeFileSync(feedFile, JSON.stringify(feedCache), 'utf8')
+      const later = savedLater.filter((it) => it.bvid !== bvid)
+      writeFileSync(laterFile, JSON.stringify(later), 'utf8')
+      refreshStateDoc()
+      return sendJson(res, 200, {
+        ok: true, items: history, main: feedCache?.main || [], up: feedCache?.up || [], later,
+        unreadCount: feedCache?.main?.length || 0,
+      })
+    }
+
     // 稍后看：落盘，不再只存在浏览器
     if (req.method === 'GET' && p === '/later') {
       return sendJson(res, 200, { ok: true, items: readJson(laterFile, []) })
@@ -852,10 +915,10 @@ export function apply(ctx, config) {
       const body = await readBody(req)
       const n = Math.min(5, Math.max(1, Number(body?.n) || 3))
       const f = feedCache
-      if (!f || !Array.isArray(f.main) || !f.main.length) return sendJson(res, 200, { ok: false, error: '还没有片单，先刷一批' })
+      if (!f || !Array.isArray(f.main)) return sendJson(res, 200, { ok: false, error: '还没有片单，先刷一批' })
       if (f.main.length >= 30) return sendJson(res, 200, { ok: false, error: '已经 30 条了，先看一阵子吧；想换就点「换一批」' })
 
-      const have = new Set(f.main.map((x) => x.bvid))
+      const have = new Set([...f.main.map((x) => x.bvid), ...(f.watchedBvids || []), ...history.map((it) => it.bvid)])
       // 先决赛圈（本来就是按分数排好的），再整个池子 —— 池子没分数，按互动率排
       const rateOf = (x) => (x.pct?.coin || 0) * 2 + (x.pct?.fav || 0) * 2 + (x.pct?.like || 0)
       const seen = new Set()
@@ -893,11 +956,13 @@ export function apply(ctx, config) {
         } else note = String(c.note || '模型没写成')
       }
 
-      const added = batch.filter((it) => whyOf.has(it.bvid)).map((it) => ({ ...it, why: whyOf.get(it.bvid), more: true }))
+      const candidates = batch.filter((it) => whyOf.has(it.bvid))
+        .map((it) => ({ ...it, why: whyOf.get(it.bvid), more: true }))
+      const added = withoutWatched({ ts: f.ts, main: candidates }).main
       if (!added.length) return sendJson(res, 200, { ok: false, error: note || '这几位都没写出理由，先不塞给你' })
 
-      const main = [...f.main, ...added]
-      feedCache = { ...f, main, moreCount: (f.moreCount || 0) + added.length }
+      feedCache = withoutWatched({ ...f, main: [...f.main, ...added], moreCount: (f.moreCount || 0) + added.length })
+      const main = feedCache.main
       try { writeFileSync(feedFile, JSON.stringify(feedCache), 'utf8') } catch { /* 无所谓 */ }
       refreshStateDoc()
       logInfo('more:add', `${added.length} 条 / 池里还剩 ${queue.length - added.length}`)
