@@ -770,7 +770,7 @@
           avWrap.appendChild(el('div', 'lbl', '头像（推荐理由旁边那只）'))
 
           // 四档内置头像，点一下就用；自己传的图会盖住它们
-          const AV_PRESETS = [['sleep', '睡觉'], ['tv', '看电视'], ['explore', '探险'], ['other', '别的插件']]
+          const AV_PRESETS = [['sleep', '睡觉'], ['tv', '看电视'], ['explore', '探险'], ['other', '哦鲸鲸']]
           const avStrip = el('div', 'avstrip')
           for (const [key, label] of AV_PRESETS) {
             const b = el('button', 'avpick')

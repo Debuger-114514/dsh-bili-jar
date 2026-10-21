@@ -32,7 +32,7 @@ const AVATAR_PRESETS = {
   sleep: { file: 'av-sleep.png', label: '睡觉' },
   tv: { file: 'av-tv.png', label: '看电视' },
   explore: { file: 'av-explore.png', label: '探险' },
-  other: { file: 'av-other.png', label: '另一个插件' },
+  other: { file: 'av-other.png', label: '哦鲸鲸' },
 }
 const DEFAULT_AVATAR_PRESET = 'sleep'
 const { z, notes: hostNotes } = await loadHostDeps()
