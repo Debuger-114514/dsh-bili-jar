@@ -19,6 +19,20 @@
     id: 'dsh-bili-jar',
     factory: () => {
       const API = '/api/bili-jar'
+
+      /**
+       * 日志 detail 说人话。
+       * feed:built 的 detail 是一整串 JSON（{"searches":9,"raw":180,...}），
+       * 直接贴出来再被省略号一切，就成了看不懂的乱码样。
+       */
+      function prettyDetail(event, d) {
+        if (d == null || d === '') return ''
+        if (typeof d === 'string') return d
+        if (d.searches !== undefined && (d.raw !== undefined || d.pool !== undefined)) {
+          return `搜 ${d.searches} 次 · 原始 ${d.raw ?? '?'} · 入池 ${d.pool ?? '?'} · 合格 ${d.qualified ?? '?'} · 推 ${d.picked ?? '?'}`
+        }
+        try { return JSON.stringify(d) } catch { return String(d) }
+      }
       const POS_KEY = 'dsh-bili-jar:pos'
       const LATER_KEY = 'dsh-bili-jar:later'
       const SIZE = 64
@@ -128,7 +142,27 @@
 .cfg .add:focus{outline:none;border-color:rgba(59,130,246,.6);border-style:solid;}
 .cfg .logbox{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto;padding:6px;
   border-radius:8px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.07);}
-.cfg .logline{font-size:10px;line-height:14px;color:#6b7280;font-family:ui-monospace,Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cfg .logline{font-size:10px;line-height:14px;color:#8b949e;font-family:ui-monospace,Consolas,monospace;
+  white-space:normal;word-break:break-word;display:flex;gap:5px;align-items:baseline;}
+.cfg .logline .lt{color:#4b5563;flex:none;}
+.cfg .logline .le{color:#93c5fd;flex:none;}
+.cfg .logline .ld{color:#8b949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;}
+.cfg .logline.warn .le{color:#fbbf24;}
+.cfg .logline.error .le{color:#f87171;}
+/* 小窗播放 */
+.mini{position:fixed;right:16px;bottom:16px;width:420px;max-width:calc(100vw - 32px);z-index:2147483000;
+  background:#0f1115;border:1px solid rgba(255,255,255,.14);border-radius:11px;overflow:hidden;
+  box-shadow:0 14px 40px rgba(0,0,0,.55);display:flex;flex-direction:column;}
+.mini-hd{display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:move;background:rgba(255,255,255,.04);
+  border-bottom:1px solid rgba(255,255,255,.08);touch-action:none;}
+.mini-tt{flex:1;min-width:0;font-size:11px;color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mini-x{flex:none;width:20px;height:20px;line-height:1;border-radius:5px;cursor:pointer;font-size:14px;
+  color:#9ca3af;background:transparent;border:1px solid rgba(255,255,255,.12);}
+.mini-x:hover{color:#fff;background:rgba(255,255,255,.1);}
+.mini iframe{display:block;width:100%;aspect-ratio:16/9;border:0;background:#000;}
+/* 头像预览 */
+.cfg .avprev{width:44px;height:44px;border-radius:10px;object-fit:cover;background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.12);flex:none;}
 .av{width:18px;height:18px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;
   font-size:10px;font-weight:700;color:#0b1220;background:#93c5fd;margin-right:5px;vertical-align:-3px;}
 `
@@ -384,6 +418,53 @@
           bd.appendChild(d)
         }
 
+        /** 小窗播放：B站 的 embed 播放器允许被 iframe 嵌（player.bilibili.com 没设 X-Frame-Options） */
+        let miniWin = null
+        function closeMini() {
+          if (miniWin) { miniWin.remove(); miniWin = null }
+        }
+        function openMini(it) {
+          closeMini()
+          const w = el('div', 'mini')
+          const head = el('div', 'mini-hd')
+          const tt = el('span', 'mini-tt', it.title || '')
+          tt.title = it.title || ''
+          const x = el('button', 'mini-x', '×')
+          x.type = 'button'
+          x.title = '关掉小窗'
+          head.append(tt, x)
+          const frame = document.createElement('iframe')
+          frame.src = `https://player.bilibili.com/player.html?bvid=${encodeURIComponent(it.bvid)}&autoplay=1&high_quality=1&danmaku=1&as_wide=1`
+          frame.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture'
+          frame.allowFullscreen = true
+          frame.setAttribute('frameborder', '0')
+          w.append(head, frame)
+          wrap.appendChild(w)
+          miniWin = w
+          x.addEventListener('click', closeMini)
+          // 拖动（按住标题栏）
+          let drag = null
+          head.addEventListener('pointerdown', (e) => {
+            if (e.target === x) return
+            const r = w.getBoundingClientRect()
+            drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }
+            head.setPointerCapture(e.pointerId)
+          })
+          head.addEventListener('pointermove', (e) => {
+            if (!drag) return
+            const r = w.getBoundingClientRect()
+            const left = Math.max(4, Math.min(window.innerWidth - r.width - 4, e.clientX - drag.dx))
+            const top = Math.max(4, Math.min(window.innerHeight - r.height - 4, e.clientY - drag.dy))
+            w.style.left = left + 'px'
+            w.style.top = top + 'px'
+            w.style.right = 'auto'
+            w.style.bottom = 'auto'
+          })
+          head.addEventListener('pointerup', () => { drag = null })
+          head.addEventListener('pointercancel', () => { drag = null })
+        }
+        window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMini() })
+
         function card(it) {
           const box = el('div', 'item')
 
@@ -444,6 +525,12 @@
           open.type = 'button'
           open.addEventListener('click', () => window.open(it.url, '_blank', 'noopener'))
           acts.appendChild(open)
+
+          const miniBtn = el('button', null, '小窗')
+          miniBtn.type = 'button'
+          miniBtn.title = '在这儿小窗播放，不跳走'
+          miniBtn.addEventListener('click', () => openMini(it))
+          acts.appendChild(miniBtn)
 
           const laterBtn = el('button', null, later.some((x) => x.bvid === it.bvid) ? '已在待看' : '稍后看')
           laterBtn.type = 'button'
@@ -583,6 +670,137 @@
           }
           box.appendChild(chipEditor('axes', '兴趣轴（回车加，× 删）', '例如 数码'))
           box.appendChild(chipEditor('ups', '固定关注的 UP（UID 或名字）', '例如 江平舟'))
+
+          // ---- 预设：把这一套设置存成一档，以后一键换回来 ----
+          const presetWrap = el('div', 'ced')
+          presetWrap.appendChild(el('div', 'lbl', '预设（存下一整套，以后一键换回）'))
+          const presetRow = el('div', 'row2')
+          const presetSel = el('select', 'sel')
+          const presetApply = el('button', 'save', '应用')
+          presetApply.type = 'button'
+          const presetDel = el('button', 'save', '删除')
+          presetDel.type = 'button'
+          presetRow.append(presetSel, presetApply, presetDel)
+          const presetSaveRow = el('div', 'row2')
+          const presetName = el('input', 'ta1')
+          presetName.placeholder = '名字，例如「我的口味」'
+          const presetSave = el('button', 'save', '存为预设')
+          presetSave.type = 'button'
+          presetSaveRow.append(presetName, presetSave)
+          const presetMsg = el('div', 'tip', '预设不含 API Key —— 换预设不会动你的密钥')
+          presetWrap.append(presetRow, presetSaveRow, presetMsg)
+          box.appendChild(presetWrap)
+
+          const drawPresets = (map) => {
+            presetSel.textContent = ''
+            const names = Object.keys(map || {})
+            if (!names.length) {
+              const o = document.createElement('option')
+              o.textContent = '（还没有预设）'
+              presetSel.appendChild(o)
+              return
+            }
+            for (const n of names) {
+              const o = document.createElement('option')
+              o.value = n
+              o.textContent = n
+              presetSel.appendChild(o)
+            }
+          }
+          const presetApi = async (body) => {
+            const r = await fetch(API + '/preset', {
+              method: 'POST', credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+            return r.json()
+          }
+          fetch(API + '/preset', { credentials: 'same-origin', cache: 'no-store' })
+            .then((r) => r.json())
+            .then((d) => { if (d.ok) drawPresets(d.presets) })
+            .catch(() => drawPresets({}))
+
+          presetSave.addEventListener('click', async () => {
+            const name = presetName.value.trim()
+            if (!name) { presetMsg.textContent = '先给它起个名字'; return }
+            try {
+              const d = await presetApi({ action: 'save', name })
+              if (!d.ok) { presetMsg.textContent = d.error || '保存失败'; return }
+              drawPresets(d.presets)
+              presetSel.value = name
+              presetName.value = ''
+              presetMsg.textContent = `已存下「${name}」`
+            } catch { presetMsg.textContent = '保存失败' }
+          })
+          presetApply.addEventListener('click', async () => {
+            const name = presetSel.value
+            if (!name) return
+            try {
+              const d = await presetApi({ action: 'apply', name })
+              if (!d.ok) { presetMsg.textContent = d.error || '应用失败'; return }
+              cfgDraft = { ...cfgDraft, ...d.config }
+              presetMsg.textContent = `已切到「${name}」，点「换一批」按它重挑`
+              render()
+            } catch { presetMsg.textContent = '应用失败' }
+          })
+          presetDel.addEventListener('click', async () => {
+            const name = presetSel.value
+            if (!name) return
+            try {
+              const d = await presetApi({ action: 'delete', name })
+              if (d.ok) { drawPresets(d.presets); presetMsg.textContent = `删掉「${name}」` }
+            } catch { presetMsg.textContent = '删除失败' }
+          })
+
+          // ---- 头像 ----
+          const avWrap = el('div', 'ced')
+          avWrap.appendChild(el('div', 'lbl', '头像（推荐理由旁边那只）'))
+          const avRow = el('div', 'row2')
+          const avImg = document.createElement('img')
+          avImg.className = 'avprev'
+          avImg.src = API + '/avatar?t=' + Date.now()
+          avImg.alt = ''
+          const avPick = el('button', 'save', '换一张')
+          avPick.type = 'button'
+          const avReset = el('button', 'save', '恢复默认')
+          avReset.type = 'button'
+          const avFile = document.createElement('input')
+          avFile.type = 'file'
+          avFile.accept = 'image/png,image/jpeg,image/webp'
+          avFile.style.display = 'none'
+          const avMsg = el('div', 'tip', 'png / jpeg / webp，方形最好，3 MB 以内')
+          avRow.append(avImg, avPick, avReset, avFile)
+          avWrap.append(avRow, avMsg)
+          box.appendChild(avWrap)
+
+          avPick.addEventListener('click', () => avFile.click())
+          avFile.addEventListener('change', () => {
+            const f = avFile.files && avFile.files[0]
+            if (!f) return
+            if (f.size > 3 * 1024 * 1024) { avMsg.textContent = '超过 3 MB 了，换张小点的'; return }
+            const reader = new FileReader()
+            reader.onload = async () => {
+              try {
+                const r = await fetch(API + '/avatar', {
+                  method: 'POST', credentials: 'same-origin',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ dataUrl: String(reader.result) }),
+                })
+                const d = await r.json()
+                if (!d.ok) { avMsg.textContent = d.error || '换失败'; return }
+                avMsg.textContent = '换好了 ✓'
+                render()
+              } catch { avMsg.textContent = '上传失败' }
+            }
+            reader.readAsDataURL(f)
+          })
+          avReset.addEventListener('click', async () => {
+            try {
+              const r = await fetch(API + '/avatar', { method: 'DELETE', credentials: 'same-origin' })
+              const d = await r.json()
+              if (d.ok) { avMsg.textContent = '已恢复默认'; render() }
+            } catch { avMsg.textContent = '恢复失败' }
+          })
 
           // ---- API 设置（默认 DeepSeek 官方；不填 key 就走宿主模型）----
           const apiRow = (label, key, ph) => {
@@ -724,8 +942,13 @@
               if (!d.ok || !d.lines?.length) { logs.appendChild(el('div', 'logline', '还没有日志')); return }
               for (const l of d.lines.slice(0, 20)) {
                 const t = new Date(l.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                const det = typeof l.detail === 'string' ? l.detail : JSON.stringify(l.detail || '')
-                logs.appendChild(el('div', 'logline', `${t} ${l.event} ${det}`.slice(0, 130)))
+                const row = el('div', 'logline' + (l.level === 'warn' ? ' warn' : l.level === 'error' ? ' error' : ''))
+                row.title = `${t} ${l.event} ${typeof l.detail === 'string' ? l.detail : JSON.stringify(l.detail || '')}`
+                row.appendChild(el('span', 'lt', t))
+                row.appendChild(el('span', 'le', l.event))
+                const det = prettyDetail(l.event, l.detail)
+                if (det) row.appendChild(el('span', 'ld', det))
+                logs.appendChild(row)
               }
             })
             .catch(() => { logs.appendChild(el('div', 'logline', '日志读不到')) })

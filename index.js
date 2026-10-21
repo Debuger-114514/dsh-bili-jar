@@ -10,7 +10,7 @@
  *    写到 `~/.dsh/bili-jar/config.json`，优先级最高。
  * ============================================================================
  */
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, appendFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, appendFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -471,6 +471,80 @@ export function apply(ctx, config) {
       return sendJson(res, 200, { ok: true, config: cfgNow(), overrides })
     }
 
+    /* ── 预设：把现在这套设置存下来，以后一键换回来 ──────────────────────
+     * 存在 config.json 的 `presets` 里。刻意**不含 apiKey**：预设是"口味"，
+     * 不该连密钥一起到处抄。 */
+    if (req.method === 'GET' && p === '/preset') {
+      return sendJson(res, 200, { ok: true, presets: overrides.presets || {}, current: cfgNow() })
+    }
+
+    if (req.method === 'POST' && p === '/preset') {
+      const body = await readBody(req)
+      const action = String(body?.action || 'save')
+      const name = String(body?.name || '').trim().slice(0, 24)
+      const presets = { ...(overrides.presets || {}) }
+
+      if (action === 'save') {
+        if (!name) return sendJson(res, 400, { ok: false, error: '预设得有个名字' })
+        const c = cfgNow()
+        presets[name] = {
+          axes: c.axes, ups: c.ups,
+          fanMin: c.fanMin, fanMax: c.fanMax,
+          minMinutes: c.minMinutes, maxMinutes: c.maxMinutes, minPlay: c.minPlay,
+          mainCount: c.mainCount, showCharging: c.showCharging,
+          curatorOn: c.curatorOn, explainOn: c.explainOn,
+          reasonStyle: c.reasonStyle, apiModel: c.apiModel, contentSource: c.contentSource,
+        }
+        overrides = { ...overrides, presets }
+        try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 落盘失败下一句会报 */ }
+        logInfo('preset:save', `${name}（${presets[name].axes.join('/')}）`)
+        return sendJson(res, 200, { ok: true, presets })
+      }
+
+      if (action === 'apply') {
+        const pv = presets[name]
+        if (!pv) return sendJson(res, 404, { ok: false, error: `没有这个预设：${name}` })
+        overrides = { ...overrides, ...pv, presets }
+        try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 同上 */ }
+        logInfo('preset:apply', name)
+        return sendJson(res, 200, { ok: true, presets, config: cfgNow() })
+      }
+
+      if (action === 'delete') {
+        delete presets[name]
+        overrides = { ...overrides, presets }
+        try { writeFileSync(overridesFile, JSON.stringify(overrides), 'utf8') } catch { /* 同上 */ }
+        return sendJson(res, 200, { ok: true, presets })
+      }
+
+      return sendJson(res, 400, { ok: false, error: `不认识的动作：${action}` })
+    }
+
+    /* ── 头像：换成自己的 ──────────────────────────────────────────────── */
+    if (req.method === 'POST' && p === '/avatar') {
+      const body = await readBody(req)
+      const dataUrl = String(body?.dataUrl || '')
+      const m = /^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl)
+      if (!m) return sendJson(res, 400, { ok: false, error: '只认 png / jpeg / webp 的 base64' })
+      let buf
+      try { buf = Buffer.from(m[2], 'base64') } catch { return sendJson(res, 400, { ok: false, error: 'base64 解不开' }) }
+      if (buf.length > 3 * 1024 * 1024) return sendJson(res, 400, { ok: false, error: '图太大了（上限 3 MB）' })
+      try {
+        mkdirSync(stateDir, { recursive: true })
+        writeFileSync(join(stateDir, 'avatar.png'), buf)
+        logInfo('avatar:set', `${Math.round(buf.length / 1024)} KB`)
+        return sendJson(res, 200, { ok: true, uploadAt: Date.now() })
+      } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+    }
+
+    if (req.method === 'DELETE' && p === '/avatar') {
+      try { if (existsSync(join(stateDir, 'avatar.png'))) rmSync(join(stateDir, 'avatar.png')) } catch (e) {
+        return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) })
+      }
+      logInfo('avatar:reset', '恢复默认头像')
+      return sendJson(res, 200, { ok: true })
+    }
+
     if (req.method === 'GET' && p === '/debug') {
       const safe = (fn, dflt) => { try { return fn() } catch (e) { return `ERR: ${e?.message ?? e}` } }
       let rows = safe(() => ctx.settings?.describe?.() || [], [])
@@ -630,10 +704,13 @@ export function apply(ctx, config) {
     // 桌宠头像：默认是蓝发鲸鱼女仆（来自 dsh-whale-widget，MIT）
     if (req.method === 'GET' && p === '/avatar') {
       try {
-        const buf = readFileSync(join(PLUGIN_DIR, 'assets', 'avatar.png'))
+        // 自己换过头像就用那份，否则用包里带的默认（蓝发鲸鱼女仆）
+        const own = join(stateDir, 'avatar.png')
+        const buf = readFileSync(existsSync(own) ? own : join(PLUGIN_DIR, 'assets', 'avatar.png'))
         res.writeHead(200, {
           'content-type': 'image/png',
-          'cache-control': 'public, max-age=86400',
+          // 换头像要立刻看到，别让浏览器缓存挡住
+          'cache-control': 'no-cache',
           'content-length': buf.length,
         })
         res.end(buf)
