@@ -25,6 +25,54 @@ git push --follow-tags        # 推 tag → 触发 .github/workflows/publish.yml
 
 工作流会先跑自检、核对 `package.json` 的版本号和 tag 是否一致，再 `npm publish --provenance`。
 
+> ⚠️ 推 `.github/workflows/*.yml` 需要 token 带 `workflow` 权限。当前这台机器的 gh 登录没有这个 scope，
+> 所以这个文件**还没进仓库**（在 `.gitignore` 里）。两个办法二选一：
+> `gh auth refresh -s workflow` 之后重新提交，或者直接在 GitHub 网页上新建这个文件。
+>
+> <details><summary>工作流内容（点开复制）</summary>
+>
+> ```yaml
+> # 打 tag 就发 npm（需要仓库里配 NPM_TOKEN secret）
+> #
+> #   1. 去 https://www.npmjs.com/settings/<你的用户名>/tokens 建一个 Automation token
+> #   2. 仓库 Settings → Secrets and variables → Actions → New repository secret
+> #      Name: NPM_TOKEN   Value: 那个 token
+> #   3. 本地：npm version patch && git push --follow-tags  → 这里自动跑
+> #
+> # 没有配 secret 时这里会直接失败，不会误发。
+> name: publish
+>
+> on:
+>   push:
+>     tags: ['v*']
+>
+> jobs:
+>   npm:
+>     runs-on: ubuntu-latest
+>     permissions:
+>       contents: read
+>       id-token: write      # npm provenance
+>     steps:
+>       - uses: actions/checkout@v4
+>       - uses: actions/setup-node@v4
+>         with:
+>           node-version: '22'
+>           registry-url: 'https://registry.npmjs.org'
+>       - name: 自检
+>         run: node tools/pack-check.mjs
+>       - name: 版本号和 tag 对得上吗
+>         run: |
+>           PKG=$(node -p "require('./package.json').version")
+>           TAG=${GITHUB_REF_NAME#v}
+>           if [ "$PKG" != "$TAG" ]; then echo "package.json 是 $PKG，tag 是 $TAG"; exit 1; fi
+>       - name: 发布
+>         run: npm publish --access public --provenance
+>         env:
+>           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+> ```
+>
+> </details>
+
 **方式二：本地直接发**
 
 ```bash
