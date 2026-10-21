@@ -14,7 +14,8 @@
 **方式一：推 tag，GitHub Actions 自动发**（推荐，一次配好终身省事）
 
 1. 在 npm 建一个 **Automation** token（classic 或 granular 都行，权限要 `read and write` 到包）
-2. 仓库 → Settings → Secrets and variables → Actions → 新建 `NPM_TOKEN`
+2. 仓库 → Settings → Secrets and variables → Actions → 新建 secret（名字 `NPM_TOKEN`；
+   如果已经叫 `DEEPSEEK_ONLY` 也不用改，工作流两个名字都认）
 3. 发版：
 
 ```bash
@@ -32,14 +33,10 @@ git push --follow-tags        # 推 tag → 触发 .github/workflows/publish.yml
 > <details><summary>工作流内容（点开复制）</summary>
 >
 > ```yaml
-> # 打 tag 就发 npm（需要仓库里配 NPM_TOKEN secret）
+> # 推 v* tag 就发 npm —— 需要仓库里有一个能直接发布的 npm token
 > #
-> #   1. 去 https://www.npmjs.com/settings/<你的用户名>/tokens 建一个 Automation token
-> #   2. 仓库 Settings → Secrets and variables → Actions → New repository secret
-> #      Name: NPM_TOKEN   Value: 那个 token
-> #   3. 本地：npm version patch && git push --follow-tags  → 这里自动跑
-> #
-> # 没有配 secret 时这里会直接失败，不会误发。
+> # 仓库里已有的 secret 名字叫 DEEPSEEK_ONLY，下面两个名字都认，
+> # 所以不用改名（以后想规范就再加一个叫 NPM_TOKEN 的，优先用那个）。
 > name: publish
 >
 > on:
@@ -68,7 +65,7 @@ git push --follow-tags        # 推 tag → 触发 .github/workflows/publish.yml
 >       - name: 发布
 >         run: npm publish --access public --provenance
 >         env:
->           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+>           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || secrets.DEEPSEEK_ONLY }}
 > ```
 >
 > </details>

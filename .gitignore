@@ -11,3 +11,4 @@ out/
 art-source/
 .github/workflows/
 *.tgz
+.npmrc
