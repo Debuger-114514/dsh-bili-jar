@@ -135,3 +135,45 @@ test('观看后移出原列表、递减计数，历史去重且仅保留最近�
   assert.equal(more.ok, true, '推荐全部看完后仍可继续从池中补充')
   assert.deepEqual(more.main.map((it) => it.bvid), [videos[12].bvid])
 })
+
+test('没有本地子簇候选时不请求模型，有候选时每次筛选各请求一次', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'bili-jar-suggest-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    calls++
+    assert.equal(JSON.parse(options.body).max_tokens, 700)
+    return { ok: true, text: async () => JSON.stringify({
+      choices: [{ message: { content: '[{"i":1,"keep":false,"why":"不合适"}]' } }],
+      usage: { prompt_tokens: 120, completion_tokens: 30 },
+    }) }
+  })
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ apiKey: 'test-only', apiBase: 'https://model.invalid' }))
+  writeFileSync(join(dir, 'pool.json'), JSON.stringify([{ title: '测试方向', tags: [] }]))
+  const empty = await mount(dir)('GET', '/tree/suggest?axis=测试方向&review=1')
+  assert.equal(empty.clusters.length, 0)
+  assert.equal(calls, 0)
+  const pool = Array.from({ length: 8 }, (_, i) => ({
+    title: '测试方向', tags: i < 3 ? ['独特子类甲', '独特子类乙'] : [`样本${i}`],
+  }))
+  writeFileSync(join(dir, 'pool.json'), JSON.stringify(pool))
+  const request = mount(dir)
+  const reviewed = await request('GET', '/tree/suggest?axis=测试方向&review=1')
+  assert.ok(reviewed.clusters.length > 0)
+  assert.equal(calls, 1)
+  assert.equal(reviewed.reviewNote, '模型一条都没留')
+  await request('GET', '/tree/suggest?axis=测试方向&review=1')
+  assert.equal(calls, 2, '重复点击没有候选审核缓存')
+})
+
+
+test('内置预设游戏轴应标记为内置，手动创建的轴仍标记为自建', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'bili-jar-builtin-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const request = mount(dir, { axes: ['游戏', '我的自定义方向'] })
+  const tree = await request('GET', '/tree')
+  assert.ok(tree.presets.includes('游戏'))
+  assert.equal(tree.nodes['游戏'].builtin, true)
+  assert.equal(tree.nodes['deepseek'].builtin, true)
+  assert.equal(tree.nodes['我的自定义方向'].builtin, false)
+})

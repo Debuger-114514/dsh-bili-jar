@@ -70,7 +70,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test tools/config-check.mjs",
+    "test": "node --test tools/config-check.mjs tools/tree-suggestions-check.mjs",
     "check": "node tools/pack-check.mjs",
     "prepublishOnly": "node tools/pack-check.mjs",
     "release": "npm version patch && git push --follow-tags"

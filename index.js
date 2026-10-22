@@ -597,7 +597,7 @@ export function apply(ctx, config) {
         const n = nodeFor(ax)
         const mine = new Set(((getUserTree()[ax] || {}).subs || []).map((s) => s.name))
         nodes[ax] = {
-          builtin: Boolean(AXIS_TREE[ax]),
+          builtin: Object.hasOwn(AXIS_BASE, ax),
           search: n.search || [],
           subs: (n.subs || []).map((s) => ({ name: s.name, terms: s.terms || [], mine: mine.has(s.name) })),
         }
