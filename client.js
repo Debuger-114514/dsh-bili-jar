@@ -118,10 +118,10 @@
 .corridor .trip{position:absolute;bottom:2px;left:6px;width:56px;height:56px;opacity:0;
   background:url("${ART}?f=anim-out") 0 0 / 336px 56px no-repeat;}
 .corridor[data-state="out"] .trip{opacity:1;
-  animation:framesOut 1.8s steps(6,end) forwards, moveOut 1.8s linear forwards;}
+  animation:framesOut 2.4s steps(6,end) infinite, moveOut 4.8s linear forwards;}
 .corridor[data-state="back"] .trip{opacity:1;
   background-image:url("${ART}?f=anim-back");
-  animation:framesBack 1.8s steps(6,end) forwards, moveBack 1.8s linear forwards;}
+  animation:framesBack 2.4s steps(6,end) infinite, moveBack 2.4s linear forwards;}
 .corridor[data-state="away"] .trip{opacity:0;}
 @keyframes framesOut{from{background-position:0 0}to{background-position:-336px 0}}
 @keyframes framesBack{from{background-position:0 0}to{background-position:-336px 0}}
@@ -416,7 +416,7 @@
           if (state === 'idle') { corridor.removeAttribute('data-state'); return }
           corridor.dataset.state = state
           if (state === 'out') {
-            tripTimer = setTimeout(() => { corridor.dataset.state = 'away' }, 1800)
+            tripTimer = setTimeout(() => { corridor.dataset.state = 'away' }, 4800)
           }
         }
 
@@ -1445,8 +1445,10 @@
             for (const it of history) bd.appendChild(card(it))
             return
           }
-          if (loading) {
-            // 走路动画搬到下面的廊道里了，这里只留一句文字
+          // 有旧片单就继续显示它（走路动画在廊道里表示正在更新），
+          // 只有真的没东西可看时才显示「装罐中」
+          const emptyNow = !(feed && Array.isArray(feed.main) && feed.main.length)
+          if (loading && emptyNow) {
             msg('正在装罐…（十几秒）')
             return
           }
@@ -1517,7 +1519,7 @@
           if (empty) { setTrip('idle'); return }
           setTrip('back')
           tsEl.textContent = '满载而归'
-          await new Promise((r) => setTimeout(r, 1850))
+          await new Promise((r) => setTimeout(r, 2450))
           setTrip('idle')
         }
 
