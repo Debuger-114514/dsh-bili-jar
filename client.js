@@ -112,21 +112,29 @@
 
 /* 装罐时的走路小人（两帧来回切） */
 /* 底部廊道：出发 / 回来 */
-.corridor{position:relative;height:60px;flex:none;overflow:hidden;
+.corridor{position:relative;height:118px;flex:none;overflow:hidden;
   border-top:1px dashed #dfe6fb;background:linear-gradient(#ffffff,#f4f8ff);}
 .corridor[hidden]{display:none;}
-.corridor .trip{position:absolute;bottom:2px;left:6px;width:56px;height:56px;opacity:0;
-  background:url("${ART}?f=anim-out") 0 0 / 336px 56px no-repeat;}
+.corridor .trip{position:absolute;bottom:2px;left:6px;width:112px;height:112px;opacity:0;
+  background:url("${ART}?f=anim-out") 0 0 / 672px 112px no-repeat;}
 .corridor[data-state="out"] .trip{opacity:1;
-  animation:framesOut 2.4s steps(6,end) infinite, moveOut 4.8s linear forwards;}
+  /* 三件事一起：换帧（每 400ms）+ 位移（分 12 段跳，不匀速）+ 左右轻晃（每步一下） */
+  animation:framesOut 2.4s steps(6,end) infinite,
+            moveOut 4.8s steps(12,end) forwards,
+            wobble .8s steps(2,jump-none) infinite;}
 .corridor[data-state="back"] .trip{opacity:1;
   background-image:url("${ART}?f=anim-back");
-  animation:framesBack 2.4s steps(6,end) infinite, moveBack 2.4s linear forwards;}
+  animation:framesBack 2.4s steps(6,end) infinite,
+            moveBack 2.4s steps(6,end) forwards,
+            wobble .8s steps(2,jump-none) infinite;}
 .corridor[data-state="away"] .trip{opacity:0;}
-@keyframes framesOut{from{background-position:0 0}to{background-position:-336px 0}}
-@keyframes framesBack{from{background-position:0 0}to{background-position:-336px 0}}
-@keyframes moveOut{from{transform:translateX(0)}to{transform:translateX(620%)}}
-@keyframes moveBack{from{transform:translateX(620%)}to{transform:translateX(0)}}
+@keyframes framesOut{from{background-position:0 0}to{background-position:-672px 0}}
+@keyframes framesBack{from{background-position:0 0}to{background-position:-672px 0}}
+/* 用 px 不用 %：角色放大了，走完整个 360px 面板需要约 470px 位移 */
+@keyframes moveOut{from{transform:translateX(0)}to{transform:translateX(470px)}}
+@keyframes moveBack{from{transform:translateX(470px)}to{transform:translateX(0)}}
+/* 走路颠簸：每步左右各歪一下，配合 steps(2) 就是「左一步、右一步」 */
+@keyframes wobble{0%{rotate:-4deg;translate:0 0}50%{rotate:3deg;translate:0 -3px}100%{rotate:-4deg;translate:0 0}}
 
 /* 列表最底下那个小人（点「更多」会换姿势） */
 .peek{display:flex;justify-content:center;padding:2px 0 6px;user-select:none;pointer-events:none;}
