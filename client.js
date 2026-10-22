@@ -119,14 +119,14 @@
   background:url("${ART}?f=anim-out") 0 0 / 672px 112px no-repeat;}
 .corridor[data-state="out"] .trip{opacity:1;
   /* 三件事一起：换帧（每 400ms）+ 位移（分 12 段跳，不匀速）+ 左右轻晃（每步一下） */
-  animation:framesOut 2.4s steps(6,end) infinite,
-            moveOut 4.8s steps(12,end) forwards,
-            wobble .8s steps(2,jump-none) infinite;}
+  animation:framesOut 1.8s steps(6,end) infinite,
+            moveOut 4.8s steps(16,end) forwards,
+            wobble .6s steps(2,jump-none) infinite;}
 .corridor[data-state="back"] .trip{opacity:1;
   background-image:url("${ART}?f=anim-back");
-  animation:framesBack 2.4s steps(6,end) infinite,
-            moveBack 2.4s steps(6,end) forwards,
-            wobble .8s steps(2,jump-none) infinite;}
+  animation:framesBack 1.8s steps(6,end) infinite,
+            moveBack 2.4s steps(8,end) forwards,
+            wobble .6s steps(2,jump-none) infinite;}
 .corridor[data-state="away"] .trip{opacity:0;}
 @keyframes framesOut{from{background-position:0 0}to{background-position:-672px 0}}
 @keyframes framesBack{from{background-position:0 0}to{background-position:-672px 0}}
@@ -134,7 +134,7 @@
 @keyframes moveOut{from{transform:translateX(0)}to{transform:translateX(470px)}}
 @keyframes moveBack{from{transform:translateX(470px)}to{transform:translateX(0)}}
 /* 走路颠簸：每步左右各歪一下，配合 steps(2) 就是「左一步、右一步」 */
-@keyframes wobble{0%{rotate:-4deg;translate:0 0}50%{rotate:3deg;translate:0 -3px}100%{rotate:-4deg;translate:0 0}}
+@keyframes wobble{0%{rotate:-2deg;translate:0 0}50%{rotate:1.5deg;translate:0 -2px}100%{rotate:-2deg;translate:0 0}}
 
 /* 列表最底下那个小人（点「更多」会换姿势） */
 .peek{display:flex;justify-content:center;padding:2px 0 6px;user-select:none;pointer-events:none;}
@@ -210,6 +210,11 @@
 .cfg .save:active{transform:translate(2px,2px);box-shadow:none;}
 .cfg .save:disabled{background:#e1e4eb;color:#9299aa;border-color:#b6bdcc;cursor:not-allowed;
   box-shadow:none;transform:none;}
+.cfg .axishead{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.cfg .fr{font-size:10px;font-weight:800;border:2px solid var(--ink);border-radius:999px;
+  padding:1px 8px;background:var(--sky-l);color:var(--blue-d);cursor:pointer;font-family:inherit;}
+.cfg .fr:hover{background:var(--sky);}
+.cfg .fr[data-auto="1"]{border-style:dashed;}
 .cfg .tip{font-size:10.5px;color:var(--muted);line-height:15px;}
 .cfg .loginlink{color:var(--blue-d);font-size:11px;font-weight:700;text-decoration:none;}
 .cfg .loginlink:hover{text-decoration:underline;}
@@ -956,7 +961,23 @@
             for (const ax of (cfgDraft.axes || [])) {
               const node = (d.nodes && d.nodes[ax]) || { subs: [] }
               const line = el('div', 'ced')
-              line.appendChild(el('div', 'lbl', ax + (node.builtin ? '' : '（自己建的）')))
+              const head = el('div', 'lbl')
+              head.textContent = ax + (node.builtin ? '' : '（自己建的）')
+              // 时效：news = 只看最近 14 天；evergreen = 不限日期
+              const fresh = el('button', 'fr', node.freshness === 'evergreen' ? '不过期' : '新闻 14 天')
+              fresh.type = 'button'
+              fresh.title = node.freshness === 'evergreen'
+                ? '内容不过期：不按日期过滤。点一下改回「新闻 14 天」'
+                : '内容会过期：只看最近 14 天。点一下改成「不过期」'
+              if (node.freshnessAuto) fresh.dataset.auto = '1'
+              fresh.onclick = async () => {
+                const next = node.freshness === 'evergreen' ? 'news' : 'evergreen'
+                const r = await treeApi({ axis: ax, action: 'setFreshness', value: next })
+                if (r.ok) { node.freshness = next; node.freshnessAuto = false; render() }
+              }
+              const headWrap = el('div', 'axishead')
+              headWrap.append(head, fresh)
+              line.appendChild(headWrap)
               const chips = el('div', 'chips2')
               const axisMsg = el('div', 'tip')
               const suggestionButtons = new Map()

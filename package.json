@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-jar",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "DSH 插件：电子榨菜罐 —— 按你的兴趣轴定向挑 B站 视频的常驻小挂件",
   "keywords": [
     "dsh",
@@ -70,7 +70,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test tools/config-check.mjs tools/tree-suggestions-check.mjs",
+    "test": "node --test tools/config-check.mjs tools/tree-suggestions-check.mjs tools/freshness-check.mjs",
     "check": "node tools/pack-check.mjs",
     "prepublishOnly": "node tools/pack-check.mjs",
     "release": "npm version patch && git push --follow-tags"

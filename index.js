@@ -23,6 +23,7 @@ import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsag
 import { todayUsage, migrateUsage } from './lib/usage.mjs'
 import { writeStateDoc } from './lib/statefile.mjs'
 import { curate } from './lib/curator.mjs'
+import { freshnessOf, isFreshness } from './lib/freshness.mjs'
 import { adoptCookies, videoSubtitle, videoComments, loginStart, loginPoll, hasLogin } from './lib/bili.mjs'
 import { qrDataUrl } from './lib/qr.mjs'
 import { setLogFile, info as logInfo, warn as logWarn, tail as logTail } from './lib/log.mjs'
@@ -447,6 +448,23 @@ export function apply(ctx, config) {
         if (aff.ready) logInfo('affinity:on', `${aff.total} 条赞踩参与打分`)
         const r = await buildPool({ ...cfg, exclude, affinity: aff }, (m) => log(m), prevPool)
         logInfo('feed:built', JSON.stringify(r.stats || {}))
+        // 自动判定 freshness：只看年龄中位，不数条数。
+        // 手填过的轴（freshnessAuto === false 且已有值）不覆盖。
+        try {
+          const per = r.stats?.perAxis || {}
+          let dirty = false
+          const next = { ...(getUserTree() || {}) }
+          for (const [axis, st] of Object.entries(per)) {
+            const cur = next[axis] || {}
+            const pinned = Boolean(cur.freshness) && cur.freshnessAuto === false
+            if (pinned) continue
+            if (!st?.suggest || cur.freshness === st.suggest) continue
+            next[axis] = { ...cur, freshness: st.suggest, freshnessAuto: true }
+            dirty = true
+            logInfo('freshness', `${axis} → ${st.suggest}（${st.reason}）`)
+          }
+          if (dirty) { userTree = next; setUserTree(next); saveUserTree() }
+        } catch (e) { log(`freshness 判定失败：${e?.message ?? e}`) }
         const out = { ...r, tookMs: Date.now() - t0, cached: false, excluded: exclude.length }
         feedCache = withoutWatched(out)
         lastShown = (r.main || []).map((c) => c.bvid)
@@ -598,6 +616,8 @@ export function apply(ctx, config) {
         const mine = new Set(((getUserTree()[ax] || {}).subs || []).map((s) => s.name))
         nodes[ax] = {
           builtin: Object.hasOwn(AXIS_BASE, ax),
+          freshness: freshnessOf(ax),
+          freshnessAuto: Boolean((userTree[ax] || {}).freshnessAuto),
           search: n.search || [],
           subs: (n.subs || []).map((s) => ({ name: s.name, terms: s.terms || [], mine: mine.has(s.name) })),
         }
@@ -627,6 +647,11 @@ export function apply(ctx, config) {
         const word = String(body?.word || '').trim()
         if (!word) return sendJson(res, 400, { ok: false, error: '缺 word' })
         node.search = Array.from(new Set([...(node.search || []), word]))
+      } else if (action === 'setFreshness') {
+        const value = String(body?.value || '').trim()
+        if (!isFreshness(value)) return sendJson(res, 400, { ok: false, error: 'freshness 只能是 news 或 evergreen' })
+        node.freshness = value
+        node.freshnessAuto = false   // 手填的，之后自动判定不再覆盖它
       } else {
         return sendJson(res, 400, { ok: false, error: `不认识的动作：${action}` })
       }
