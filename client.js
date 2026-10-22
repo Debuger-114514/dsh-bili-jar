@@ -140,6 +140,12 @@
 .peek{display:flex;justify-content:center;padding:2px 0 6px;user-select:none;pointer-events:none;}
 .peek img{width:64px;height:64px;object-fit:contain;opacity:.92;
   filter:drop-shadow(0 3px 4px rgba(30,42,99,.22));}
+.peek.walking{position:relative;height:64px;}
+.peek.walking img{position:absolute;left:50%;margin-left:-32px;bottom:0;}
+.peek.walking img:nth-child(1){animation:peekA .52s steps(1,end) infinite;}
+.peek.walking img:nth-child(2){animation:peekB .52s steps(1,end) infinite;}
+@keyframes peekA{0%,49.9%{opacity:1}50%,100%{opacity:0}}
+@keyframes peekB{0%,49.9%{opacity:0}50%,100%{opacity:1}}
 
 /* ── 卡片 ─────────────────────────────────────────────────── */
 .item{border:2px solid var(--ink);border-radius:14px;padding:11px 12px;background:var(--paper2);
@@ -1087,7 +1093,7 @@
           avWrap.appendChild(el('div', 'lbl', '头像（推荐理由旁边那只）'))
 
           // 四档内置头像，点一下就用；自己传的图会盖住它们
-          const AV_PRESETS = [['sleep', '睡觉'], ['tv', '看电视'], ['explore', '探险'], ['other', '哦鲸鲸']]
+          const AV_PRESETS = [['sleep', '睡觉'], ['tv', '看电视'], ['explore', '探险'], ['other', '哦鲸鲸'], ['walk', '走路']]
           const avStrip = el('div', 'avstrip')
           for (const [key, label] of AV_PRESETS) {
             const b = el('button', 'avpick')
@@ -1512,11 +1518,21 @@
 
           // 列表最底下的小人：点「更多电子榨菜」会换个姿势
           if (tab === 'main' && list.length) {
-            const peek = el('div', 'peek')
-            const p = document.createElement('img')
-            p.src = WALK[poseIdx % WALK.length]
-            p.alt = ''
-            peek.appendChild(p)
+            const peek = el('div', 'peek' + (loading ? ' walking' : ''))
+            if (loading) {
+              // 装罐中：两帧来回迈步（就是原来那个走路动画，现在当桌宠用）
+              for (const src of [WALK[0], WALK[1]]) {
+                const im = document.createElement('img')
+                im.src = src
+                im.alt = ''
+                peek.appendChild(im)
+              }
+            } else {
+              const p = document.createElement('img')
+              p.src = WALK[poseIdx % WALK.length]
+              p.alt = ''
+              peek.appendChild(p)
+            }
             bd.appendChild(peek)
           }
 

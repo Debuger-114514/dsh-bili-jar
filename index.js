@@ -36,6 +36,7 @@ const AVATAR_PRESETS = {
   tv: { file: 'av-tv.png', label: '看电视' },
   explore: { file: 'av-explore.png', label: '探险' },
   other: { file: 'av-other.png', label: '哦鲸鲸' },
+  walk: { file: 'av-walk.gif', label: '走路' },
 }
 const DEFAULT_AVATAR_PRESET = 'sleep'
 
@@ -1006,8 +1007,11 @@ export function apply(ctx, config) {
           ? join(PLUGIN_DIR, 'assets', AVATAR_PRESETS[want].file)
           : (existsSync(own) ? own : join(PLUGIN_DIR, 'assets', AVATAR_PRESETS[chosen].file))
         const buf = readFileSync(file)
+        // 走路的头像是 GIF（两帧来回），别的还是 PNG
+        const isGif = /\.gif$/i.test(file)
         res.writeHead(200, {
-          'content-type': 'image/png',
+          'content-type': isGif ? 'image/gif' : 'image/png',
+          ...(isGif ? { 'cache-control': 'public, max-age=86400' } : {}),
           // 换头像要立刻看到，别让浏览器缓存挡住
           'cache-control': 'no-cache',
           'content-length': buf.length,
