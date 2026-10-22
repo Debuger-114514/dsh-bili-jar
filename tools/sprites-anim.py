@@ -11,7 +11,7 @@ from PIL import Image
 from cutout import cut_image
 
 SHEET = 'art-source/maid-anim-sheet.png'
-OUT = 'assets'
+OUT = 'art-source/frames'   # 单帧只是中间产物，进包的是拼好的雪碧图
 SIZE = 192
 MIN_AREA = 8000
 

@@ -733,6 +733,7 @@ export function apply(ctx, config) {
       const map = {
         closed: 'jar-closed.png', active: 'jar-active.png', face: 'face.png',
         'walk-a': 'walk-a.png', 'walk-b': 'walk-b.png',
+        'anim-out': 'anim-out.png', 'anim-back': 'anim-back.png',
       }
       const file = map[f]
       if (!file) return sendJson(res, 404, { ok: false, error: '没有这张图' })

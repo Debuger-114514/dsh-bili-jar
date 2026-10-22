@@ -111,12 +111,22 @@
 .bd::-webkit-scrollbar-thumb{background:#d3ddff;border-radius:6px;}
 
 /* 装罐时的走路小人（两帧来回切） */
-.walker{position:relative;width:84px;height:84px;margin:4px auto 2px;}
-.walker img{position:absolute;left:0;bottom:0;width:100%;height:100%;object-fit:contain;
-  animation:walkA .52s steps(1,end) infinite;}
-.walker img:nth-child(2){animation-name:walkB;}
-@keyframes walkA{0%,49.9%{opacity:1}50%,100%{opacity:0}}
-@keyframes walkB{0%,49.9%{opacity:0}50%,100%{opacity:1}}
+/* 底部廊道：出发 / 回来 */
+.corridor{position:relative;height:60px;flex:none;overflow:hidden;
+  border-top:1px dashed #dfe6fb;background:linear-gradient(#ffffff,#f4f8ff);}
+.corridor[hidden]{display:none;}
+.corridor .trip{position:absolute;bottom:2px;left:6px;width:56px;height:56px;opacity:0;
+  background:url("${ART}?f=anim-out") 0 0 / 336px 56px no-repeat;}
+.corridor[data-state="out"] .trip{opacity:1;
+  animation:framesOut 1.8s steps(6,end) forwards, moveOut 1.8s linear forwards;}
+.corridor[data-state="back"] .trip{opacity:1;
+  background-image:url("${ART}?f=anim-back");
+  animation:framesBack 1.8s steps(6,end) forwards, moveBack 1.8s linear forwards;}
+.corridor[data-state="away"] .trip{opacity:0;}
+@keyframes framesOut{from{background-position:0 0}to{background-position:-336px 0}}
+@keyframes framesBack{from{background-position:0 0}to{background-position:-336px 0}}
+@keyframes moveOut{from{transform:translateX(0)}to{transform:translateX(620%)}}
+@keyframes moveBack{from{transform:translateX(620%)}to{transform:translateX(0)}}
 
 /* 列表最底下那个小人（点「更多」会换姿势） */
 .peek{display:flex;justify-content:center;padding:2px 0 6px;user-select:none;pointer-events:none;}
@@ -387,7 +397,28 @@
         const tsEl = el('span', 'ts', '')
         ft.append(refresh, moreBtn, tsEl)
 
-        panel.append(hd, tabsEl, bd, ft)
+        const corridor = el('div', 'corridor')
+        corridor.hidden = true
+        corridor.append(el('div', 'trip'))
+        panel.append(hd, tabsEl, bd, corridor, ft)
+
+        /**
+         * 出发 / 回来。三种状态：
+         *   out  —— 从左边走到右边出画（1.8s，6 帧 × 300ms）
+         *   away —— 她在画外，只留一行文字
+         *   back —— 从右边走回来（1.8s）
+         * 走完动画用 class 切回来，避免重播。
+         */
+        let tripTimer = null
+        const setTrip = (state) => {
+          if (tripTimer) { clearTimeout(tripTimer); tripTimer = null }
+          corridor.hidden = state === 'idle'
+          if (state === 'idle') { corridor.removeAttribute('data-state'); return }
+          corridor.dataset.state = state
+          if (state === 'out') {
+            tripTimer = setTimeout(() => { corridor.dataset.state = 'away' }, 1800)
+          }
+        }
 
         const style = document.createElement('style')
         style.textContent = CSS
@@ -1415,15 +1446,7 @@
             return
           }
           if (loading) {
-            // 装罐时让她走两步（两帧来回切）
-            const walker = el('div', 'walker')
-            for (const src of WALK) {
-              const im = document.createElement('img')
-              im.src = src
-              im.alt = ''
-              walker.appendChild(im)
-            }
-            bd.appendChild(walker)
+            // 走路动画搬到下面的廊道里了，这里只留一句文字
             msg('正在装罐…（十几秒）')
             return
           }
@@ -1470,11 +1493,42 @@
           if (tab === 'main' && missing.length) msg('这几根轴今天没货：' + missing.join('、'))
         }
 
+        /** 这一趟「出门找」是否真的在跑（用于决定要不要走回来） */
+        let tripActive = false
+        let tripHintTimer = null
+
+        const startTrip = () => {
+          if (tripActive) return
+          tripActive = true
+          setTrip('out')
+          const t0 = Date.now()
+          tsEl.textContent = '出门找…'
+          // 她在画外的时候，用底栏那行字报进度（不占列表、不压角色）
+          tripHintTimer = setInterval(() => {
+            tsEl.textContent = `在翻… ${Math.round((Date.now() - t0) / 1000)}s`
+          }, 1000)
+        }
+
+        /** 数据到了：走回来（1.8s），走完再收起廊道 */
+        const endTrip = async (empty) => {
+          if (!tripActive) return
+          tripActive = false
+          if (tripHintTimer) { clearInterval(tripHintTimer); tripHintTimer = null }
+          if (empty) { setTrip('idle'); return }
+          setTrip('back')
+          tsEl.textContent = '满载而归'
+          await new Promise((r) => setTimeout(r, 1850))
+          setTrip('idle')
+        }
+
         async function openFeed(force) {
           if (loading) return
           loading = true
           render()
           if (force) refresh.disabled = true
+          // 真正要等的时候才走：点「换一批」立刻出发；被动刷新等 400ms 还没回来再出发
+          if (force) startTrip()
+          else setTimeout(() => { if (loading) startTrip() }, 400)
           try {
             const res = await fetch(API + '/feed' + (force ? '?refresh=1' : ''), { credentials: 'same-origin', cache: 'no-store' })
             const data = await res.json()
@@ -1486,6 +1540,7 @@
             loadReasons()
             syncLater()
             syncHistory()
+            await endTrip(false)
           } catch (e) {
             feed = null
             tsEl.textContent = '失败'
@@ -1493,6 +1548,7 @@
             msg('装罐失败：' + String(e?.message || e).slice(0, 60))
             return
           } finally {
+            await endTrip(true)
             loading = false
             refresh.disabled = false
             if (panel.hidden === false) render()

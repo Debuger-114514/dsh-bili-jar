@@ -12,6 +12,8 @@ if (closeAt < 0) { console.error('没找到 CSS 结尾'); process.exit(1) }
 const css = lines.slice(0, closeAt).join('\n')
   .replace(/\$\{PANEL_W\}/g, '360')
   .replace(/\$\{PANEL_H\}/g, '520')
+  // 预览时把 ${ART}?f=xxx 指到本地文件（真机上走 /api/bili-jar/art）
+  .replace(/\$\{ART\}\?f=([a-z-]+)/g, '../assets/$1.png')
 mkdirSync(new URL('../out/', import.meta.url), { recursive: true })
 writeFileSync(new URL('../out/design.css', import.meta.url), css, 'utf8')
 console.log('out/design.css', css.length, 'bytes')
