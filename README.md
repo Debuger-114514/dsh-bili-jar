@@ -130,6 +130,29 @@ dsh plugin --profile web add dsh-bili-jar
 
 装完重启 dsh，再刷新页面。
 
+### 更新
+
+npm 上的最新版看这里：<https://www.npmjs.com/package/dsh-bili-jar>
+
+```bash
+# 走 npm 装的
+pnpm up dsh-bili-jar@latest
+
+# 走 GitHub 装的（会重新拉默认分支）
+pnpm up dsh-bili-jar
+
+# 桌面版（依赖写死在 profile 里时）
+# 把 package.json 里的版本改成 ^0.2.5，或者直接写 @latest，再 pnpm install
+```
+
+装完**重启 dsh**，然后 **Ctrl+Shift+R** 硬刷新页面 —— 客户端脚本会被浏览器缓存，光点刷新不够。
+
+怎么确认版本对不对：开一次面板，`设置` 页底部有版本号；或者直接看接口：
+
+```bash
+curl -s http://127.0.0.1:你的端口/api/bili-jar/ping | head -c 120
+```
+
 ## 第一次用
 
 1. 点罐子 → 设置 → 填 API Key（DeepSeek 官方）
