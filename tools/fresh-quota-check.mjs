@@ -92,3 +92,23 @@ test('新片在排除集里 → 不选它', () => {
   const r = freshQuotaReplace({ ...s, qualified, exclude: new Set(['BVex']), minPlay: 10000, maxCount: 5 })
   assert.equal(r.replaced, 0)
 })
+
+test('main 装满（picked === mainCount）时也要能换 —— 替换是一换一，长度不变', () => {
+  const picked = [
+    old('BVa1', '游戏', 0.62), old('BVa2', '游戏', 0.58), old('BVb1', '音乐', 0.7),
+    old('BVc1', '数码', 0.66), old('BVd1', '健身', 0.52),
+  ]
+  const taken = new Set(picked.map((c) => c.bvid))
+  const perAxisCount = new Map([['游戏', 2], ['音乐', 1], ['数码', 1], ['健身', 1]])
+  const qualified = [...picked, fresh('BVnew', '数码', 0.45)]
+  const r = freshQuotaReplace({
+    picked, qualified, taken, exclude: new Set(), perAxisCount, perUpCount: new Map(),
+    minPlay: 10000, maxCount: 5,
+  })
+  assert.equal(r.needed, true, '确实缺新片')
+  assert.equal(r.replaced, 1, '装满 5 条也要换')
+  assert.ok(picked.some((c) => c.bvid === 'BVnew'), '新片进来了')
+  assert.equal(picked.length, 5, '总数不变')
+  assert.ok(!picked.some((c) => c.bvid === 'BVa2'), '换掉的是游戏轴最低分那条')
+  assert.equal(perAxisCount.get('游戏'), 1, '游戏轴还剩一条，没被清空')
+})

@@ -4,7 +4,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { playGrowthOf, coldStartBonus, COLD_START } from '../lib/pool.mjs'
+import { playGrowthOf, nextPlayBase, coldStartBonus, COLD_START } from '../lib/pool.mjs'
 
 const DAY = 86400000
 
@@ -46,4 +46,35 @@ test('增速 ≥5 万/天时冷启动 +0.01，但总分仍 ≤0.05', () => {
   assert.equal(base(1, 49000), 0.05, '差一点到 5 万不给')
   assert.equal(base(3, null), 0.03, '增速未知按原档')
   assert.equal(COLD_START.day2, 0.05, '上限没变')
+})
+
+test('测不出来时不重置基准 —— 否则频繁刷新会让增速永远算不出来', () => {
+  const now = 1_800_000_000_000
+  // 上一轮 1 小时前记的：间隔不到 6 小时，测不出
+  const short = nextPlayBase({ play: 100000, playPrev: 100000, playAt: now - 3600_000 }, 120000, now)
+  assert.equal(short.playGrowth, null)
+  assert.equal(short.playAt, now - 3600_000, '基准时间不许被刷成 now')
+  assert.equal(short.playPrev, 100000, '基准播放量也不许变')
+
+  // 连续多次短间隔刷新，基准仍然停在最初那一刻 → 攒够 6 小时后能算出增速
+  let st = { play: 100000, playPrev: 100000, playAt: now - 3600_000 }
+  for (let i = 0; i < 6; i++) {
+    const next = nextPlayBase(st, 100000 + i * 1000, now + i * 600_000)
+    assert.equal(next.playGrowth, null)
+    assert.equal(next.playAt, now - 3600_000)
+    st = { play: 100000 + i * 1000, playPrev: next.playPrev, playAt: next.playAt }
+  }
+  // 6 小时后终于可测：100000 → 130000，间隔 7 小时
+  const long = nextPlayBase({ play: 130000, playPrev: 100000, playAt: now - 3600_000 }, 130000, now + 6 * 3600_000)
+  assert.ok(long.playGrowth > 0, '攒够时间就能算出增速')
+  assert.equal(long.playAt, now + 6 * 3600_000, '可测时基准推进')
+  assert.equal(long.playPrev, 130000)
+})
+
+test('首次见到：用当前值起算，增速为 null', () => {
+  const now = 1_800_000_000_000
+  const r = nextPlayBase(null, 50000, now)
+  assert.equal(r.playGrowth, null)
+  assert.equal(r.playPrev, 50000)
+  assert.equal(r.playAt, now)
 })
