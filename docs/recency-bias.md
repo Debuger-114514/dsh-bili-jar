@@ -42,6 +42,8 @@
 | 连续两轮 `main` 的 BV 重叠 | 4–5 条 | **≤ 1 条** |
 | 池子里 `stats.fresh`（近 7 天新增） | 没有这个字段 | **> 0，且能看见** |
 | 池子总量 | 无上限，只增不减 | **≤ 400** |
+| **近 4 天进前 24**（T8 之后新增） | **0**（实测） | **≥ 3** |
+| **`main` 里 ≤3 天条数**（T9 配额） | 0 | **≥ 1** |
 
 这些是**方向性目标**，不是硬性 KPI。达不到不许硬凑（比如不许为了指标降 `minPlay`）。
 
@@ -267,6 +269,385 @@ const seedScore = (it) => (daysAgo(it.pubdate) <= 30 ? 1 : 0) * 1e9 + (it.play |
 
 ---
 
+### T8 · 冷启动补偿（第二轮的根因，优先级最高）
+
+> 2026-10-27 追加。T1–T7 上线后实测仍然「推的都是几天前的」，查出更深一层的原因。
+
+#### 实测证据（`~/.dsh/bili-jar-test`，197 条池子，8 根轴）
+
+按发布时间分组：
+
+| 年龄 | 条数 | 分数中位 | 有互动数据 | 进前 24 |
+|---|---|---|---|---|
+| 0–1 天 | 7 | 0.490 | **0** | **0** |
+| 1–2 天 | 12 | 0.499 | **0** | **0** |
+| 2–3 天 | 28 | 0.487 | **0** | **0** |
+| 3–4 天 | 19 | 0.423 | **0** | **0** |
+| 4–7 天 | 74 | 0.485 | 52 | 15 |
+| 7 天以上 | 57 | 0.536 | 47 | 9 |
+
+按「有没有互动数据」分组：
+
+| 组 | 条数 | 分数中位 | 平均年龄 | 进前 24 |
+|---|---|---|---|---|
+| 有数据（补查过） | 99 | **0.545** | 7.4 天 | **24 / 24** |
+| 没有数据 | 98 | **0.478** | 3.7 天 | **0** |
+
+**门槛 0.605，近 4 天最高分 0.516，差距 0.089。**
+
+#### 机制：补查闭环
+
+```
+搜索接口不返回投币/收藏
+  → 新条目进池时 币=0 藏=0，互动分（最多 0.39）拿不到
+  → 初评落后
+  → 只有「初评前 12 名」才补详情（coin/fav）
+  → 新条目永远挤不进前 12 → 永远没数据 → 永远落后
+```
+
+老条目一旦被补过数据，就带着这 0.09 的优势稳定占据前 24。
+
+#### 模拟（同一份池子，197 条）
+
+| 方案 | 近 4 天进前 24 |
+|---|---|
+| 现状 | 0 |
+| 只给新片平加 +0.09 | 1 |
+| 只补数据（不加分） | 1 |
+| 补数据 + 新片 +0.03（≤3 天） | 6 |
+| 补数据 + 衰减 0.05 / 0.03 / 0.01 | **8** |
+
+结论：**加分只是放大镜，补数据才是杠杆**。而且「无条件平加」会把 18k 播放的片子顶进前 24，所以 bonus 必须带门槛。
+
+---
+
+#### T8a · 给新条目补互动数据
+
+**字段**：池子条目新增 `statsAt`（互动数据抓取时间戳；0 = 从未补过）与 `statsTries`（尝试次数）。
+
+**改哪**：`lib/pool.mjs` 的合并段（`toCandidate`）、硬过滤之后、初评之前；`lib/bili.mjs` 的 `videoDetail` 已有。
+
+**怎么改**：
+
+1. `toCandidate()` 保留 `statsAt: old?.statsAt || 0`、`statsTries: old?.statsTries || 0`。
+2. 在「3. 硬过滤」之后、`collect()` 之前插一段「3a. 冷启动补数据」：
+
+```js
+// 缺互动数据的候选：搜索接口不给 coin/fav，只有详情接口有。
+// 每轮只补一小批（新进池优先），避免请求量失控。
+const COLD_LIMIT = 8
+const coldNeed = candidates.filter((it) =>
+  !it.statsAt && !(Number(it.coin) > 0) && !(Number(it.favorites) > 0) && (it.statsTries || 0) < 3
+).sort((a, b) => (b.firstSeen || 0) - (a.firstSeen || 0) || (b.play || 0) - (a.play || 0)).slice(0, COLD_LIMIT)
+```
+
+3. 对这批并发补详情（**并发 4**，照抄现有前 12 名补查的写法）：
+
+```js
+await Promise.all(coldNeed.map(async (it) => {
+  it.statsTries = (Number(it.statsTries) || 0) + 1
+  try {
+    const d = await videoDetail(it.bvid)
+    const st = d?.data?.stat
+    if (st) {
+      it.like = Number(st.like) || it.like || 0
+      it.coin = Number(st.coin) || it.coin || 0
+      it.favorites = Number(st.favorite) || it.favorites || 0
+      it.danmaku = Number(st.danmaku) || it.danmaku || 0
+      it.play = Math.max(Number(st.view) || 0, it.play || 0)
+      it.statsAt = Date.now()
+      stats.detailCold += 1
+    }
+  } catch (e) { stats.detailColdFailed += 1 }
+}))
+```
+
+4. `stats` 新增 `detailCold`、`detailColdFailed`；日志一行 `冷启动补数据：成功 N / 失败 M`。
+
+**注意**：
+
+- `videoDetail` 的返回值字段名先核对（`stat.view` / `stat.like` / `stat.coin` / `stat.favorite` / `stat.danmaku`），不要凭记忆写。
+- 失败的条目**不要**写 `statsAt`，但要 `statsTries += 1`，到 3 次放弃。
+- 这 8 条是**额外**于原有「前 12 名补查」的，两段互不影响。
+
+---
+
+#### T8b · 冷启动加分（只在缺数据时给）
+
+**为什么不能无条件给**：模拟里平加会放进 18k 播放的片子。加分要补偿的是「数据缺失」，不是「年龄小」。
+
+**新增导出**（`lib/pool.mjs`）：
+
+```js
+export const COLD_START = { day2: 0.05, day4: 0.03, day7: 0.01, minPlayFloor: 50000 }
+
+/**
+ * 冷启动补偿：条目还没补到互动数据时，按年龄给一点点分，
+ * 让它有机会进入决赛圈；一旦补过详情（statsAt > 0）就不再给 —— 补贴是临时的，不是永久的。
+ */
+export function coldStartBonus(it, opts = {}) {
+  if (!it || it.statsAt) return 0
+  if (Number(it.coin) > 0 || Number(it.favorites) > 0) return 0
+  const age = ageOf(it)
+  if (age === null) return 0
+  const floor = Math.max(COLD_START.minPlayFloor, (Number(opts.minPlay) || 0) * 2)
+  if ((Number(it.play) || 0) < floor) return 0
+  if (spamScore(it.title) > 0.2) return 0
+  if (age <= 2) return COLD_START.day2
+  if (age <= 4) return COLD_START.day4
+  if (age <= 7) return COLD_START.day7
+  return 0
+}
+```
+
+**接到打分里**：`scoreItem()` 中，`affinityDelta` 之后：
+
+```js
+const cold = coldStartBonus(it, { minPlay: ctx?.minPlay })
+it.coldBonus = Number(cold.toFixed(4))
+score += cold
+if (cold > 0) it.reasons.push('缺互动数据，按冷启动补偿')
+```
+
+`scoreItem` 的 `ctx` 需要新增 `minPlay`（`buildPool` 里传进去）。
+
+**必须遵守**：
+
+- 上限就是 0.05，**不许调大**（它只有时效权重的 5%，盖不过贴轴 0.30）
+- **不许改动 `WEIGHTS` 表** —— bonus 是增量，不是权重，权重合计仍必须各为 1.00
+- 补过数据的条目（`statsAt > 0`）**永远不给**
+
+---
+
+#### T8c · 告诉模型「数据未补」
+
+**问题**：即使加了分，模型看到的还是「赞 0% 币 0% 藏 0%」，会误判成没人看。
+
+**改哪**：`lib/curator.mjs` 的 `lineOf()` 与 system prompt。
+
+1. `lineOf` 加一列：`c.statsAt ? '数据:全' : '数据:未补'`
+2. system prompt 加一句：
+
+```
+- 标了「数据:未补」的候选，率值偏低是因为还没回查，不代表没人喜欢；不要用数据否定它们。
+```
+
+**验收**：候选中同时出现「数据:全」「数据:未补」两种；prompt 增量 < 80 token。
+
+---
+
+#### T8d · 观测
+
+`stats` 新增：
+
+```js
+coldStart: { need: coldNeed.length, applied: stats.detailCold, failed: stats.detailColdFailed }
+```
+
+片单里保留 `it.coldBonus`，`toCard()` 带出去（前端暂不显示，方便 `tools/why.mjs` 打印）。
+
+---
+
+#### T8 验收（必须逐条做到）
+
+1. 新增 `tools/cold-start-check.mjs`，至少 8 个用例：
+
+| 场景 | 期望 |
+|---|---|
+| 缺数据 + 1 天 + 30 万播放 | 0.05 |
+| 缺数据 + 3 天 + 30 万播放 | 0.03 |
+| 缺数据 + 6 天 + 30 万播放 | 0.01 |
+| 缺数据 + 1 天 + 3 万播放 | 0（低于门槛） |
+| 缺数据 + 1 天 + 30 万播放，但标题党 | 0 |
+| 有 `statsAt` | 0 |
+| 有 coin 或 favorites | 0 |
+| 缺 pubdate | 0 |
+
+2. `node --test tools/*.mjs` 全绿（原 38 个 + 新增）
+3. `node tools/feed.mjs 10000 0` 输出：
+   - `stats.detailCold > 0`
+   - `stats.coldStart.applied > 0`
+   - `main` 里「≤4 天」**至少 1 条**（现状 0）
+4. 用真实配置（8 根轴）跑一轮，把「近 4 天进前 24」的条数填进 §6（模拟值 8，实际 ≥3 就算通过）
+5. `node tools/pack-check.mjs` 过
+
+#### T8 风险与边界
+
+- 每轮多 8 次详情请求，约 +4 秒；**不许为了快提高并发到 8 以上**（B 站 会限流）
+- 不许把 `COLD_LIMIT` 调到 20 以上（会变成全池补数据）
+- 不许把 bonus 加到 `freshN` 权重里去（那样等于改权重表）
+- 如果 `videoDetail` 拿不到 coin（接口变了），**先停下来报告**，不要用别的接口硬凑
+
+---
+
+### T9 · 新鲜度配额（确定性兜底）
+
+> 2026-10-27 追加，与 T8 一起做。T8 靠分数，T9 靠规则 —— 分数分布再怎么调，都可能被更强的老片整体压住；配额保证「至少一条新的」。
+
+**规则**：
+
+> `mainCount` 条里，**至少 1 条**满足：`≤3 天` 且 `播放 ≥ max(50000, 全局 minPlay × 2)` 且 `贴轴` 且 `非标题党`。
+
+**改哪**：`lib/pool.mjs` 的选片段（`tryPick` 循环之后、固定 UP 之前）。
+
+**怎么改**：
+
+1. 选完 `picked` 后检查：
+
+```js
+const freshOk = (c) => {
+  const age = ageOf(c)
+  return age !== null && age <= 3 &&
+    (c.play || 0) >= Math.max(50000, minPlay * 2) &&
+    c.axis && spamScore(c.title) <= 0.2
+}
+const hasFresh = picked.some(freshOk)
+```
+
+2. 若 `!hasFresh` 且 `picked.length >= 3`（少于 3 条时不强凑）：
+
+```js
+// 从合格候选里挑一个够格的新的（分数最高的那个）
+const freshCand = qualified
+  .filter((c) => freshOk(c) && !taken.has(c.bvid) && !exclude.has(c.bvid))
+  .sort((a, b) => b.score - a.score)[0]
+
+if (freshCand) {
+  // 替换「分数最低、且不是它那根轴唯一一条」的
+  const victims = picked
+    .filter((c) => perAxisCount.get(c.axis) > 1)
+    .sort((a, b) => a.score - b.score)
+  const victim = victims[0]
+  if (victim) { 从 picked 移除 victim，放回 perAxisCount / perUpCount；再 tryPick(freshCand, freshCand.axis) }
+}
+```
+
+3. `stats.freshQuota = { needed: !hasFresh, replaced: victim ? 1 : 0 }`；日志一行 `新鲜度配额：用 X 换掉 Y`。
+
+**必须遵守**：
+
+- **不许**为了配额把 `picked` 填到超过 `mainCount`
+- 替换目标必须满足「那根轴还有别的条目」，否则会把某根轴整个挤掉
+- 找不到合格的新的 → **不替换**，`replaced = 0`，不要放宽条件去凑
+
+**验收**：
+
+- 单测 `tools/fresh-quota-check.mjs`：
+  - 池子里全是老片、但有一条够格的新片 → 结果含 1 条新的
+  - 够格的新片不存在 → 结果不变、`replaced = 0`
+  - 新片所在轴只有一条老片 → 不替换那一条（轴不被清空）
+  - `picked.length < 3` → 不触发
+- `node tools/feed.mjs 10000 0` 跑两轮，`main` 里 ≤3 天的**至少 1 条**（两轮都满足）
+
+---
+
+### T10 · 互动数据会过期，定期刷新
+
+**问题**：T8a 补的数据是「补的那一刻」的快照。一条 5 天前补过的视频，现在播放可能翻了十倍，分数还按旧数据算。
+
+**改哪**：`lib/pool.mjs` 的冷启动补数据段（T8a 那段）。
+
+**怎么改**：
+
+1. 在 T8a 的 `coldNeed` 之外，再加一批「过期刷新」：
+
+```js
+const REFRESH_LIMIT = 3
+const REFRESH_AFTER_MS = 7 * 86400000
+const staleNeed = candidates
+  .filter((it) => it.statsAt && Date.now() - it.statsAt > REFRESH_AFTER_MS)
+  .sort((a, b) => (b.play || 0) - (a.play || 0))     // 播放高的先刷
+  .slice(0, REFRESH_LIMIT)
+```
+
+2. 复用同一段详情补查逻辑（成功写 `statsAt = now`），`stats.detailRefresh += 1`。
+3. 日志：`数据刷新：N 条`。
+
+**边界**：
+
+- 每轮最多 3 条，**不和 T8a 的 8 条合并计数**（可以同时发生，总请求上限 = 12 + 8 + 3）
+- 刷新失败**不重置** `statsAt`（保持旧数据，下轮再试）
+- 只刷新「还在池子里且合格」的条目，不刷全池
+
+**验收**：
+
+- 单测：`statsAt` 8 天前的被选中；3 天前的不选；最多 3 条
+- `stats.detailRefresh` 出现且 ≤3
+
+---
+
+### T11 · 播放增速（用「涨得快」当冷启动的质量信号）
+
+**问题**：新条目互动率低是正常的，但**播放涨得快**说明它正在被传播 —— 这是新条目唯一现成的质量信号。可惜现在只存当前播放量，没有对比。
+
+**改哪**：`lib/pool.mjs` 的合并段 `toCandidate()`、冷启动排序、`coldStartBonus()`。
+
+**怎么改**：
+
+1. 条目新增两个字段：`playPrev`（上次记录的播放）、`playAt`（上次记录的时间戳）。
+2. 合并时先算增速，再覆盖：
+
+```js
+const prevPlay = Number(old?.play) || 0
+const prevAt = Number(old?.playAt) || 0
+const gapDays = prevAt ? (now - prevAt) / 86400000 : 0
+const growth = prevAt && gapDays >= 0.25 && prevPlay > 0
+  ? Math.max(0, (playNow - prevPlay) / gapDays)   // 每天涨多少播放
+  : null
+// 写回：playPrev = playNow, playAt = now, playGrowth = growth
+```
+
+`gapDays < 0.25`（不到 6 小时）时不计算，避免噪声。
+
+3. **用途一（主要）**：冷启动补数据的排序，增速高的先补：
+
+```js
+.sort((a, b) => (b.playGrowth ?? -1) - (a.playGrowth ?? -1) || (b.firstSeen || 0) - (a.firstSeen || 0))
+```
+
+理由：涨得快的先拿到数据，收益最大。
+
+4. **用途二（次要）**：`coldStartBonus` 里加一个很小的增量，**但总分不超过 0.05**：
+
+```js
+const growthBonus = (it.playGrowth ?? 0) >= 50000 ? 0.01 : 0
+return Math.min(COLD_START.day2, base + growthBonus)   // base 是 T8b 的三档之一
+```
+
+5. `stats.growthSeen`：本轮有多少条目算出了增速（可观测）。
+
+**边界**：
+
+- 没有 `playAt`（首次见到）→ `playGrowth = null`，**不参与任何判断**
+- 增速可能是负数（播放被清、数据回退）→ 夹到 0，不惩罚
+- **不许**把增速做成独立权重项，它只是冷启动内部的排序与 +0.01 微调
+
+**验收**：
+
+- 单测 `tools/growth-check.mjs`：
+  - 两次见到，间隔 1 天，播放 10 万 → 20 万 → 增速 10 万/天
+  - 间隔 <6 小时 → `null`
+  - 首次见到 → `null`
+  - 播放倒退 → 增速 0（不是负数）
+  - 增速 ≥5 万时，冷启动总分仍 ≤0.05
+
+---
+
+### 三个任务的先后
+
+```
+T8（补数据 + 冷启动加分）
+  ↓ 必须串行
+T11（增速）── 依赖 T8a 的补数据段，复用同一个循环
+T10（刷新）── 依赖 T8a 的补数据函数，抽出来复用
+T9（配额）── 独立，可以并行做，但要在 T8 之后跑验收（否则数字对不上）
+```
+
+建议顺序：**T8 → T9 → T11 → T10**。
+T9 早做，因为它不依赖数据、能马上验证「至少一条新的」；T10/T11 是优化，放后面。
+
+---
+
 ## 5. 完成后要做的事
 
 1. **跑一遍全量验证**，把数字填进 §6：
@@ -276,9 +657,17 @@ node --test tools/config-check.mjs tools/tree-suggestions-check.mjs tools/freshn
 node tools/feed.mjs 10000 0
 ```
 
-2. **更新 README 的「一轮都经过什么」**：搜索那段要写清「1 个词走最新、2 个词走综合」；池子那段要写「重复出现会被扣分、池子上限 400」。
+2. **更新 README 的「一轮都经过什么」**：搜索那段要写清「1 个词走最新、2 个词走综合」；池子那段要写「重复出现会被扣分、池子上限 400」；再加一行「新条目缺互动数据时会补查，并按冷启动给一点临时加分」。
 3. **版本号 +1（patch）**，更新日志加一条。
 4. **不要自己打 tag / 发布 npm** —— 交给 Lead 复核后发。
+
+### 第二轮（T8–T11）额外的验证命令
+
+```bash
+node --test tools/cold-start-check.mjs tools/fresh-quota-check.mjs tools/growth-check.mjs
+node tools/feed.mjs 10000 0     # 看 stats.detailCold / coldStart / freshQuota
+node tools/why.mjs BV1xxxxx     # 单条：有没有补数据、有没有吃到冷启动分
+```
 
 ---
 
@@ -305,6 +694,29 @@ node tools/feed.mjs 10000 0
 - T4 兼容性：旧格式（纯数组）shown.json 读成 1 轮，有单测覆盖。
 
 ---
+
+## 6b. 第二轮结果记录（T8–T11，执行者填）
+
+> 2026-10-27 填。测量口径：真实配置（8 根轴），prev = `~/.dsh/bili-jar-test/pool.json`（197 条），buildPool 直跑一轮，结果只写临时文件、不碰测试实例的数据目录。
+
+| 指标 | T1–T7 之后 | T8–T11 之后 | 目标 |
+|---|---|---|---|
+| 近 4 天进前 24 | 0 | **4 / 24**（top24 里有 2/3/3/3 天的） | ≥ 3 ✓ |
+| `main` 里 ≤4 天条数 | 0 | **3 / 5** | ≥ 1 ✓ |
+| `main` 里 ≤3 天条数 | 0 | **1 / 5**（main 年龄 7/3/5/3/2 天） | ≥ 1 ✓ |
+| `stats.detailCold` | — | **8**（失败 0） | > 0 ✓ |
+| `stats.detailRefresh` | — | 0 | 0–3 ✓（首跑还没有超过 7 天的旧数据，符合预期） |
+| `stats.coldStart.applied` | — | **8** | > 0 ✓ |
+| `stats.freshQuota.replaced` | — | 0（needed=false：main 本来就有够格的新片；配额逻辑另有 6 个单测覆盖） | 记录即可 ✓ |
+| 池子里「缺互动数据」占比 | 98 / 197（50%） | **99 / 206（48%）** | 每轮补 8 条（≈4pp/轮），随新条目进入动态平衡 |
+| 测试通过数 | 38 | **62** | ≥ 46 ✓ |
+
+过程记录：
+
+- 提交：`599fd0a` T8 / `1be2539` T9 / `de9c90c` T11 / `16dde26` T10，另有一个收尾提交（README + 0.2.8）。
+- **T8a 位置微调**：「3a」段放在 `candidates` 建好之后、初评之前 —— 施工单写「collect() 之前」，但它自己的代码片段引用了 `candidates`，而这个变量在 collect 之后才存在；取片段语义（只给贴轴合格的条目补数据，不浪费 8 个请求）。
+- **T11 验证**：真跑两轮间隔不到 6 小时，增速按设计全是 null；把池子里 3 条的 `playAt` 拨回 1 天前再跑，`stats.growthSeen=1`、增速 15.6 万/天 —— 语义正确（增速只在「这轮又被搜到」时重算，另 2 条没被搜到就不动）。
+- **「缺互动数据」两种口径**：施工单口径（币藏全 0，含老前 12 名补查路径给过数据的）99/206 = 48%；新字段口径（`statsAt=0`，从未走过冷启动补查）198/206 —— T8 刚上线，旧池子大部分还没轮到，每轮再补 8 条。
 
 ## 7. 明确不要做的
 
