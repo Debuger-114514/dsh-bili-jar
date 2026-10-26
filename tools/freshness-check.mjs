@@ -46,6 +46,18 @@ test('手填的 freshness 覆盖预分配', () => {
   assert.equal(freshnessOf('时政'), 'news')
 })
 
+test('改判防护：近两周还有 ≥2 条新内容就不许判 evergreen（T5）', () => {
+  const old = [1775, 2052, 2883]
+  assert.equal(decideFreshness(old).freshness, 'evergreen', '不带 freshCount 时维持原行为（老调用方不受影响）')
+  const blocked = decideFreshness(old, { freshCount: 3 })
+  assert.equal(blocked.freshness, 'news')
+  assert.ok(blocked.reason.includes('不判常青'), `reason: ${blocked.reason}`)
+  assert.equal(decideFreshness(old, { freshCount: 1 }).freshness, 'evergreen', '只有 1 条新内容照样判')
+  assert.equal(decideFreshness(old, { freshCount: 0 }).freshness, 'evergreen')
+  assert.equal(decideFreshness([300, 320, 400], { freshCount: 2 }).freshness, 'news', '中位 300 天 + 有新内容')
+  assert.equal(decideFreshness([300, 320, 400], { freshCount: 0 }).freshness, 'evergreen')
+})
+
 test('只有 news 轴受日期窗口约束', () => {
   setUserTree({})
   assert.equal(windowOf('时政', 14), 14)
