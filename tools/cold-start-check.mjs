@@ -1,10 +1,10 @@
 /**
- * tools/cold-start-check.mjs —— T8：冷启动补偿的单测
+ * tools/cold-start-check.mjs —— T8 + T10：冷启动补偿与数据刷新的单测
  * 跑法：node --test tools/cold-start-check.mjs
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { coldStartBonus, COLD_START } from '../lib/pool.mjs'
+import { coldStartBonus, COLD_START, pickStale, REFRESH_AFTER_MS } from '../lib/pool.mjs'
 
 /** 造一条缺互动数据的候选：coin/fav = 0、statsAt = 0 */
 function cold(ageDays, play, title = '一期正常的科技测评：新旗舰手机两周体验') {
@@ -61,4 +61,43 @@ test('已经有 coin 或 favorites 的不给', () => {
 
 test('缺 pubdate 的不给', () => {
   assert.equal(coldStartBonus(cold(null, 300000)), 0)
+})
+
+// ---- T10：过期刷新 ----
+
+const NOW = 1_800_000_000_000
+const stale = (bvid, statsAgeDays, play) => ({
+  bvid, play,
+  statsAt: statsAgeDays == null ? 0 : NOW - statsAgeDays * 86400000,
+})
+
+test('保质期是 7 天', () => {
+  assert.equal(REFRESH_AFTER_MS, 7 * 86400000)
+})
+
+test('statsAt 8 天前的被选中，3 天前的不选，没补过的不选', () => {
+  const items = [stale('BVold', 8, 1000), stale('BVnew', 3, 999999), stale('BVnone', null, 500)]
+  const picked = pickStale(items, NOW)
+  assert.deepEqual(picked.map((x) => x.bvid), ['BVold'])
+})
+
+test('最多 3 条，播放高的先刷', () => {
+  const items = [
+    stale('BVa', 9, 100),
+    stale('BVb', 9, 300000),
+    stale('BVc', 9, 200000),
+    stale('BVd', 9, 400000),
+    stale('BVe', 9, 50),
+  ]
+  const picked = pickStale(items, NOW)
+  assert.equal(picked.length, 3)
+  assert.deepEqual(picked.map((x) => x.bvid), ['BVd', 'BVb', 'BVc'], '播放降序取前 3')
+})
+
+test('不传 now 用当前时间；空输入不炸', () => {
+  assert.deepEqual(pickStale([]), [])
+  assert.deepEqual(pickStale(null), [])
+  // 用真实时钟构造：30 天前补的数据肯定过期
+  assert.equal(pickStale([{ bvid: 'BVx', play: 1000, statsAt: Date.now() - 30 * 86400000 }]).length, 1)
+  assert.equal(pickStale([{ bvid: 'BVy', play: 1000, statsAt: Date.now() - 3 * 86400000 }]).length, 0)
 })
