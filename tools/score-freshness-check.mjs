@@ -62,3 +62,19 @@ test('news 轴 14 天窗口照旧：15 天前的归零，1 天前的接近满分
   assert.equal(d15.freshN, 0)
   assert.ok(d1.freshN > 0.9, `1 天 freshN=${d1.freshN}`)
 })
+
+test('缺日期的条目拿 0.5 中性值：得分介于「今天发的」和「一年前的」之间（T7）', () => {
+  // maxDays=365 让 news 轴的时效差拉开（权重 0.10），看得出排序
+  const ctx = { maxDays: 365, tagDf: CTX.tagDf, tagTotal: CTX.tagTotal }
+  const today = video(0, '时政观察：某国大选局势分析')
+  const noDate = video(null, '时政观察：某国大选局势分析')
+  const yearOld = video(365, '时政观察：某国大选局势分析')
+  scoreItem(today, ['时政'], null, ctx)
+  scoreItem(noDate, ['时政'], null, ctx)
+  scoreItem(yearOld, ['时政'], null, ctx)
+  assert.ok(today.freshN > 0.99, `今天 freshN=${today.freshN}`)
+  assert.equal(noDate.freshN, 0.5, '缺日期 = 0.5 中性值，不给满分也不给 0')
+  assert.ok(yearOld.freshN < 0.01, `一年前 freshN=${yearOld.freshN}`)
+  assert.ok(today.score > noDate.score && noDate.score > yearOld.score,
+    `${today.score} > ${noDate.score} > ${yearOld.score}`)
+})
