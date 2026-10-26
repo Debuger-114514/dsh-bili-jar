@@ -64,7 +64,8 @@ for (const bvid of process.argv.slice(2)) {
     console.log(`  总分 ${inPool.score}  →  第 ${rank} 名（${scored.length} 条里）`)
     console.log(`  贴轴: ${inPool.axis || '?'}${inPool.sub ? ' · ' + inPool.sub : ''}  sim=${inPool.sims?.[inPool.axis] ?? '?'}  时效 freshN=${inPool.freshN}`)
     console.log(`  互动率: 赞${((inPool.rates?.likeRate ?? 0) * 100).toFixed(0)}% 币${((inPool.rates?.coinRate ?? 0) * 100).toFixed(0)}% 藏${((inPool.rates?.favRate ?? 0) * 100).toFixed(0)}%（满分刻度）`)
-    console.log(`  互动数据: ${inPool.statsAt ? '已补（' + new Date(inPool.statsAt).toISOString().slice(0, 10) + ' 回查）' : '未补（币/藏还是搜索层的 0）'}  冷启动加分: ${inPool.coldBonus || 0}`)
+    const growth = inPool.playGrowth
+    console.log(`  互动数据: ${inPool.statsAt ? '已补（' + new Date(inPool.statsAt).toISOString().slice(0, 10) + ' 回查）' : '未补（币/藏还是搜索层的 0）'}  冷启动加分: ${inPool.coldBonus || 0}  播放增速: ${growth == null ? '还没算过（首次见到）' : Math.round(growth).toLocaleString() + '/天'}`)
     console.log(`  进过 main ${inPool.shownTimes || 0} 次（每轮重复出现扣 0.03，封顶 0.15）`)
     for (const r of inPool.reasons || []) console.log(`  · ${r}`)
     console.log('--- 各轴匹配 ---')
