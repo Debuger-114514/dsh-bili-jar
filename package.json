@@ -71,7 +71,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test tools/config-check.mjs tools/tree-suggestions-check.mjs tools/freshness-check.mjs tools/score-freshness-check.mjs tools/pool-decay-check.mjs tools/shown-check.mjs tools/cold-start-check.mjs",
+    "test": "node --test tools/config-check.mjs tools/tree-suggestions-check.mjs tools/freshness-check.mjs tools/score-freshness-check.mjs tools/pool-decay-check.mjs tools/shown-check.mjs tools/cold-start-check.mjs tools/fresh-quota-check.mjs",
     "check": "node tools/pack-check.mjs",
     "prepublishOnly": "node tools/pack-check.mjs",
     "release": "npm version patch && git push --follow-tags"
