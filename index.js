@@ -24,6 +24,7 @@ import { todayUsage, migrateUsage } from './lib/usage.mjs'
 import { writeStateDoc } from './lib/statefile.mjs'
 import { curate } from './lib/curator.mjs'
 import { freshnessOf, isFreshness } from './lib/freshness.mjs'
+import { parseShown, pushRound, flattenShown } from './lib/shown.mjs'
 import { adoptCookies, videoSubtitle, videoComments, loginStart, loginPoll, hasLogin } from './lib/bili.mjs'
 import { qrDataUrl } from './lib/qr.mjs'
 import { setLogFile, info as logInfo, warn as logWarn, tail as logTail } from './lib/log.mjs'
@@ -266,7 +267,9 @@ export function apply(ctx, config) {
   }
   feedCache = withoutWatched(feedCache)
   let prevPool = readJson(poolFile, [])
-  let lastShown = readJson(shownFile, [])
+  // 最近推过什么：{ rounds: [[...] ...] }，最近 5 轮最多 25 条 —— 排除集用。
+  // 旧格式（纯数组）也能读，升级不炸。
+  let recentShown = parseShown(readJson(shownFile, null))
   let reasons = loadReasonCache(reasonsFile)
   /** 罐子里那份配置：优先级最高（原生设置页看不见这些字段，只能自己存） */
   let overrides = readJson(overridesFile, {})
@@ -444,7 +447,9 @@ export function apply(ctx, config) {
         const t0 = Date.now()
         const cfg = cfgNow()
         maybeAdoptLogin(cfg)
-        const exclude = [...new Set([...(force ? lastShown : []), ...history.map((it) => it.bvid)])]
+        // 排除集 = 最近 5 轮推过的（≤25 条）+ 看过的。之前只排除上一轮 5 条，
+        // 决赛圈 24 个位置剔除 5 个之后还是同一批老面孔。
+        const exclude = [...new Set([...flattenShown(recentShown), ...history.map((it) => it.bvid)])]
         const aff = affinityOf()
         if (aff.ready) logInfo('affinity:on', `${aff.total} 条赞踩参与打分`)
         const r = await buildPool({ ...cfg, exclude, affinity: aff }, (m) => log(m), prevPool)
@@ -468,8 +473,8 @@ export function apply(ctx, config) {
         } catch (e) { log(`freshness 判定失败：${e?.message ?? e}`) }
         const out = { ...r, tookMs: Date.now() - t0, cached: false, excluded: exclude.length }
         feedCache = withoutWatched(out)
-        lastShown = (r.main || []).map((c) => c.bvid)
-        try { writeFileSync(shownFile, JSON.stringify(lastShown), 'utf8') } catch { /* 无所谓 */ }
+        recentShown = pushRound(recentShown, (r.main || []).map((c) => c.bvid))
+        try { writeFileSync(shownFile, JSON.stringify(recentShown), 'utf8') } catch { /* 无所谓 */ }
         if (Array.isArray(r.pool)) {
           prevPool = r.pool
           try { writeFileSync(poolFile, JSON.stringify(prevPool), 'utf8') } catch (e) { log(`pool 落盘失败：${e?.message ?? e}`) }
