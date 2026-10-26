@@ -2,6 +2,8 @@
 
 > 2026-10-26 · 诊断原文由 GLM 写，DeepSeek 审核并改写成施工单。
 > **给执行者（GLM）**：按 §4 的任务表从上往下做，一次只做一个任务，做完自测再进下一个。
+>
+> 🟡 **最新任务：T12（§4 末尾）—— 给历史条目补 `statsAt`。做完跑测试，别的不用管。**
 
 ---
 
@@ -645,6 +647,45 @@ T9（配额）── 独立，可以并行做，但要在 T8 之后跑验收（�
 
 建议顺序：**T8 → T9 → T11 → T10**。
 T9 早做，因为它不依赖数据、能马上验证「至少一条新的」；T10/T11 是优化，放后面。
+
+---
+
+### T12 · 给历史条目补 `statsAt`（最后一个小活）
+
+**背景**：`statsAt` 是 T8 才加的字段。用户池子里已有的 170 多条老条目，**当时补过互动数据（coin/fav 非 0），但 `statsAt` 是 0**。后果：
+
+- 冷启动加分：不受影响（`coin>0 || fav>0` 那一关已经挡住了）✅
+- **T10 的 7 天刷新：永远选不中它们** ❌ —— `pickStale()` 只认 `statsAt > 0`
+
+**改哪**：`lib/pool.mjs` 的 `toCandidate()`（合并段）。
+
+**怎么改**：合并时，如果老条目「已经有互动数据」但 `statsAt` 还是 0，就把 `statsAt` 补成它上次被见到的时间：
+
+```js
+// 历史条目：数据早就补过（coin/fav 非 0），但 statsAt 是 T8 之后才有的字段。
+// 补成「上次见到的时间」当作数据快照时间，让 T10 的过期刷新能覆盖到它们。
+const hasStats = Number(old?.coin) > 0 || Number(old?.favorites) > 0
+const statsAt = Number(old?.statsAt) || (hasStats ? (Number(old?.lastSeen) || now) : 0)
+```
+
+然后把 `statsAt` 写进候选对象（原来那行 `statsAt: Number(old?.statsAt) || 0` 换成这个变量）。
+
+**必须遵守**：
+
+- **不要**给「真的没有数据」（coin=0 且 fav=0）的条目设 `statsAt` —— 那会让冷启动补偿失效（`coldStartBonus` 第一关就是 `if (it.statsAt) return 0`）
+- 不要动 `statsTries`
+- 不要改 `pickStale()` 的逻辑
+
+**验收**：
+
+- 在 `tools/cold-start-check.mjs`（或新建 `tools/stats-at-check.mjs`）加 3 个用例：
+  - `{coin: 5, favorites: 0, statsAt: 0, lastSeen: T}` → `statsAt === T`
+  - `{coin: 0, favorites: 0, statsAt: 0}` → `statsAt === 0`（不许乱标）
+  - `{coin: 5, statsAt: 12345}` → 保持 `12345`（不覆盖已有值）
+- `node --test tools/*-check.mjs` 全绿（当前 70 个，做完应 ≥73）
+- 跑一轮 `node tools/feed.mjs 10000 0`，池子里 `statsAt > 0` 的条目数应该**接近**「有 coin 或 fav 的条目数」
+
+**注意**：`toCandidate()` 是内部函数，测试可以直接测 `buildPool` 的结果，或者把这段逻辑抽成一个小函数导出（推荐后者，好测）。
 
 ---
 
