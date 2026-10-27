@@ -67,6 +67,8 @@ const DEFAULTS = {
   maxMinutes: 90,
   /** 只看最近 N 天；0 = 不限日期 */
   maxDays: 14,
+  /** 推荐多样性 0–1：0 = 完全确定（老行为），越大越随机 */
+  diversity: 0.5,
   minPlay: 10000,
   mainCount: 5,
   showCharging: false,
@@ -314,6 +316,7 @@ export function apply(ctx, config) {
       minMinutes: toNum(merged.minMinutes, 8),
       maxMinutes: toNum(merged.maxMinutes, 90),
       maxDays: merged.maxDays === undefined ? 14 : toNum(merged.maxDays, 14),
+      diversity: Math.max(0, Math.min(1, merged.diversity === undefined ? 0.5 : toNum(merged.diversity, 0.5))),
       minPlay: toNum(merged.minPlay, 10000),
       mainCount: toNum(merged.mainCount, 5),
       showCharging: toBool(merged.showCharging),

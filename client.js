@@ -830,7 +830,7 @@
           box.appendChild(rowOf('点开时展开更长的理由', mkSwitch('explainOn')))
 
           // ---- 数字设置（以前只能改 config.json）----
-          const numRow = (label, key, hint, min) => {
+          const numRow = (label, key, hint, min, max, step) => {
             const wrap = el('div', 'row2')
             wrap.appendChild(el('span', 'lbl', label))
             const inp = el('input', 'ta1')
@@ -839,6 +839,8 @@
             inp.style.flex = 'none'
             inp.value = String(cfgDraft[key] ?? '')
             inp.min = String(min ?? 0)
+            if (max != null) inp.max = String(max)
+            if (step != null) inp.step = String(step)
             const save = async () => {
               const n = Number(inp.value)
               if (!Number.isFinite(n) || n < (min ?? 0)) { inp.value = String(cfgDraft[key] ?? ''); return }
@@ -855,6 +857,8 @@
           box.appendChild(numRow('最长时长（分）', 'maxMinutes', '', 1))
           box.appendChild(numRow('播放门槛', 'minPlay', '', 0))
           box.appendChild(numRow('每轮几条', 'mainCount', '', 1))
+          // 0 = 每次都一样；1 = 很随机。默认 0.5：前 5 名固定，后面的按分数加权打乱
+          box.appendChild(numRow('多样性（0–1）', 'diversity', '0 = 固定，越大越随机', 0, 1, 0.1))
 
           // ---- 可编辑的词表：兴趣轴 / 固定关注 ----
           const chipEditor = (key, title, placeholder) => {
