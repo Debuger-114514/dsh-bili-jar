@@ -4,7 +4,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { coldStartBonus, COLD_START, pickStale, REFRESH_AFTER_MS } from '../lib/pool.mjs'
+import { coldStartBonus, COLD_START, pickStale, REFRESH_AFTER_MS, statsAtOf } from '../lib/pool.mjs'
 
 /** 造一条缺互动数据的候选：coin/fav = 0、statsAt = 0 */
 function cold(ageDays, play, title = '一期正常的科技测评：新旗舰手机两周体验') {
@@ -100,4 +100,24 @@ test('不传 now 用当前时间；空输入不炸', () => {
   // 用真实时钟构造：30 天前补的数据肯定过期
   assert.equal(pickStale([{ bvid: 'BVx', play: 1000, statsAt: Date.now() - 30 * 86400000 }]).length, 1)
   assert.equal(pickStale([{ bvid: 'BVy', play: 1000, statsAt: Date.now() - 3 * 86400000 }]).length, 0)
+})
+
+// ---- T12：历史条目补 statsAt ----
+
+test('老条目有互动数据但没 statsAt → 补成上次见到的时间', () => {
+  assert.equal(statsAtOf({ coin: 5, favorites: 0, statsAt: 0, lastSeen: 1690000000000 }), 1690000000000)
+  assert.equal(statsAtOf({ coin: 0, favorites: 9, lastSeen: 1690000000000 }), 1690000000000, '只有 fav 也算有数据')
+  assert.equal(statsAtOf({ coin: 5, lastSeen: 1690000000000 }, 1700000000000), 1690000000000, '有 lastSeen 用 lastSeen')
+  assert.equal(statsAtOf({ coin: 5 }, 1700000000000), 1700000000000, '连 lastSeen 都没有才退到 now')
+})
+
+test('真没有数据的（coin=0 且 fav=0）不许乱标', () => {
+  assert.equal(statsAtOf({ coin: 0, favorites: 0, statsAt: 0, lastSeen: 1690000000000 }), 0)
+  assert.equal(statsAtOf({ lastSeen: 1690000000000 }), 0)
+  assert.equal(statsAtOf(null), 0, '没有 old 的全新条目')
+})
+
+test('已有 statsAt 的保持原值，不覆盖', () => {
+  assert.equal(statsAtOf({ coin: 5, statsAt: 12345 }), 12345)
+  assert.equal(statsAtOf({ coin: 0, favorites: 0, statsAt: 12345 }), 12345, '即使是零数据条目，已有标记也不动')
 })
