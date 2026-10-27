@@ -121,3 +121,17 @@ test('已有 statsAt 的保持原值，不覆盖', () => {
   assert.equal(statsAtOf({ coin: 5, statsAt: 12345 }), 12345)
   assert.equal(statsAtOf({ coin: 0, favorites: 0, statsAt: 12345 }), 12345, '即使是零数据条目，已有标记也不动')
 })
+
+test('老条目（这一轮没被搜到）也要在合并时补上 statsAt', async () => {
+  const now = Date.now()
+  const prev = [
+    // 上一轮留下的：有数据、但没有 statsAt（T8 之前的老条目）
+    { bvid: 'BVold', title: '旧的一条', duration: 900, pubdate: now / 1000 - 86400 * 3, play: 200000, coin: 50, favorites: 300, statsAt: 0, lastSeen: now - 3600000 },
+    // 上一轮留下的：真没数据 —— 不许乱标
+    { bvid: 'BVnodata', title: '没数据的一条', duration: 900, pubdate: now / 1000 - 86400 * 3, play: 120000, coin: 0, favorites: 0, statsAt: 0, lastSeen: now - 3600000 },
+  ]
+  // buildPool 要联网，这里只验合并逻辑用的纯函数：statsAtOf 被合并段调用
+  const { statsAtOf } = await import('../lib/pool.mjs')
+  assert.equal(statsAtOf(prev[0], now), prev[0].lastSeen, '有数据的补成上次见到的时间')
+  assert.equal(statsAtOf(prev[1], now), 0, '没数据的保持 0')
+})
