@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { inspect } from 'node:util'
 import { loadHostDeps } from './lib/hostdeps.mjs'
-import { buildPool, toCard, axisSim } from './lib/pool.mjs'
+import { buildPool, toCard, axisSim, lightProbe, capCuratedEcho } from './lib/pool.mjs'
+import { buildUpList } from './lib/ups.mjs'
+import { decideRefresh, OPEN_AFTER_MS, AUTO_AFTER_MS, FULL_AFTER_MS } from './lib/refresh.mjs'
 import { AXIS_TREE, AXIS_BASE, setUserTree, getUserTree, nodeFor, suggestSubs } from './lib/tree.mjs'
 import { reviewClusters } from './lib/tree-review.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
@@ -108,7 +110,13 @@ export const Config = !z ? undefined : z.object({
   reasonStyle: z.string().default('').extra('volatile', true),
 })
 
-const FEED_TTL = 30 * 60 * 1000
+/**
+ * 片单多久算「旧」。
+ * 0.3.0 之前是 30 分钟的硬 TTL —— 超过就阻塞重建，所以重开 DSH 要空白 40 秒。
+ * 现在它只用来判断「要不要在角标上说明后台正在更新」：
+ * 真正的重建时机交给 lib/refresh.mjs 的三档（3h 打开 / 6h 自动 / 24h 全量）。
+ */
+const FEED_TTL = 3 * 3600 * 1000
 
 const unwrap = (v) => (v && typeof v === 'object' && 'value' in v ? v.value : v)
 
@@ -231,6 +239,8 @@ export function apply(ctx, config) {
   const feedbackFile = join(stateDir, 'feedback.jsonl')
   const laterFile = join(stateDir, 'later.json')
   const historyFile = join(stateDir, 'history.json')
+  const upsFile = join(stateDir, 'ups.json')
+  const refreshFile = join(stateDir, 'refresh.json')
   // 重启会清掉内存里的池子/片单，磁盘上的 json 又没人愿意翻 —— 所以每次启动
   // 和每轮刷新之后，顺手写一份人眼能看的 STATE.md
   const refreshStateDoc = () => { try { writeStateDoc(stateDir) } catch { /* 写不出来不影响主流程 */ } }
@@ -269,6 +279,23 @@ export function apply(ctx, config) {
   }
   feedCache = withoutWatched(feedCache)
   let prevPool = readJson(poolFile, [])
+  /**
+   * 三档刷新（0.3.0）：probedAt = 上次轻量探测，fullAt = 上次完整重建。
+   * 「触发同时清零」—— 真跑起来了就把两个计时都推到现在，打开面板和定时器别重复触发。
+   */
+  let refreshAt = (() => {
+    const j = readJson(refreshFile, null)
+    return {
+      probedAt: Number(j?.probedAt) || 0,
+      fullAt: Number(j?.fullAt) || Number(feedCache?.ts) || 0,
+    }
+  })()
+  function saveRefreshAt() {
+    try { writeFileSync(refreshFile, JSON.stringify(refreshAt), 'utf8') } catch { /* 无所谓 */ }
+  }
+  /** 熟人名单（lib/ups.mjs 算的；内存留一份给 buildPool 和探测用） */
+  let upsList = []
+  let upsTiers = { regular: [], observing: [], black: [] }
   // 最近推过什么：{ rounds: [[...] ...] }，最近 5 轮最多 25 条 —— 排除集用。
   // 旧格式（纯数组）也能读，升级不炸。
   let recentShown = parseShown(readJson(shownFile, null))
@@ -276,6 +303,7 @@ export function apply(ctx, config) {
   /** 罐子里那份配置：优先级最高（原生设置页看不见这些字段，只能自己存） */
   let overrides = readJson(overridesFile, {})
   let building = null
+  let probing = null
   let explaining = null
 
   /** 用户自己长出来的枝：启动时读进来，之后每次改动都落盘 */
@@ -339,6 +367,33 @@ export function apply(ctx, config) {
    * 把 feedback.jsonl 折成「UP → 次数」「tag → 次数」，喂给 pool 做微调。
    * bvid → UP/tag 的映射从池子和当前片单里找（都是刚落过盘的）。
    */
+  /**
+   * 从本地行为里认出「熟人」（0.3.0）。
+   * 输入全是已有的本地文件：点赞/踩、点开过、稍后看、上一轮池子（补 mid）。
+   * 结果写 ~/.dsh/bili-jar/ups.json，同时在日志里报一行，**不占设置页界面**。
+   */
+  function refreshUps() {
+    try {
+      let feedback = []
+      try {
+        feedback = readFileSync(feedbackFile, 'utf8').split(/\r?\n/).filter(Boolean)
+          .map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+      } catch { feedback = [] }
+      const list = buildUpList({
+        feedback,
+        history,
+        later: readJson(laterFile, []),
+        pool: [...(prevPool || []), ...((feedCache && feedCache.main) || [])],
+        now: Date.now(),
+      })
+      upsList = list.ups
+      upsTiers = list.byTier
+      try { writeFileSync(upsFile, JSON.stringify(list, 'utf8')) } catch { /* 无所谓 */ }
+      const names = (arr) => arr.slice(0, 8).map((u) => u.name || u.mid).join('、') || '无'
+      logInfo('ups:list', `熟人 ${list.byTier.regular.length} / 观察 ${list.byTier.observing.length} / 拉黑 ${list.byTier.black.length}｜熟人：${names(list.byTier.regular)}`)
+    } catch (e) { logWarn('ups:fail', String(e?.message ?? e)) }
+  }
+
   function affinityOf() {
     let rows = []
     try {
@@ -404,17 +459,21 @@ export function apply(ctx, config) {
    * 一次调用写 5 条，不逐条问。
    */
   async function enrichReasons(picks, cfg) {
+    // 每条的「字幕→热评」是一次独立请求，5 条串行白等 5 秒。3 并发走批。
     const got = []
-    for (const p of picks) {
-      let content = ''
-      const sub = await videoSubtitle(p.bvid)
-      if (sub.ok) content = sub.text
-      else {
-        const cm = await videoComments(p.bvid, 20)
-        if (cm.ok) content = cm.text
-      }
-      logInfo('content:fetch', `${p.bvid} ${content ? content.length + ' 字' : '无内容'}`)
-      got.push({ ...p, content })
+    for (let i = 0; i < picks.length; i += 3) {
+      const rows = await Promise.all(picks.slice(i, i + 3).map(async (p) => {
+        let content = ''
+        const sub = await videoSubtitle(p.bvid)
+        if (sub.ok) content = sub.text
+        else {
+          const cm = await videoComments(p.bvid, 20)
+          if (cm.ok) content = cm.text
+        }
+        logInfo('content:fetch', `${p.bvid} ${content ? content.length + ' 字' : '无内容'}`)
+        return { ...p, content }
+      }))
+      got.push(...rows)
     }
     const usable = got.filter((x) => x.content)
     if (!usable.length) return picks
@@ -441,21 +500,49 @@ export function apply(ctx, config) {
     return picks.map((p) => (byBvid.get(p.bvid) ? { ...p, why: byBvid.get(p.bvid).slice(0, 160) } : p))
   }
 
+  /** 排除集：最近 5 轮推过的 + 看过的 —— 建池和探测共用 */
+  function excludesNow() {
+    return [...new Set([...flattenShown(recentShown), ...history.map((it) => it.bvid)])]
+  }
+
+  /**
+   * A1：stale-while-revalidate —— 磁盘上有旧片单就**立刻**给，重建挪到后台。
+   * 之前超过 30 分钟就阻塞重建，重开 DSH 后面板要空白 40 多秒。
+   */
   async function getFeed(force) {
-    const fresh = feedCache && Date.now() - feedCache.ts < FEED_TTL
-    if (!force && fresh) return { ...feedCache, cached: true }
+    const hasCache = Boolean(feedCache && feedCache.ts)
+    if (!force && hasCache) {
+      const age = Date.now() - feedCache.ts
+      const action = decideRefresh({ now: Date.now(), probedAt: refreshAt.probedAt, fullAt: refreshAt.fullAt, opened: true })
+      if (action === 'full') kickBuild('打开面板：片单过期')
+      else if (action === 'probe') kickProbe('打开面板')
+      return { ...feedCache, cached: true, stale: age > FEED_TTL, refreshing: action !== 'none' }
+    }
     if (building) return building
+    return kickBuild(force ? '换一批' : '首次装罐')
+  }
+
+  /** 后台完整重建（不阻塞调用方；已经在建就复用同一个 Promise） */
+  function kickBuild(reason) {
+    if (building) return building
+    refreshAt.probedAt = Date.now()
+    refreshAt.fullAt = Date.now()
+    saveRefreshAt()
+    logInfo('refresh:trigger', `full（${reason || ''}）`)
     building = (async () => {
       try {
         const t0 = Date.now()
         const cfg = cfgNow()
         maybeAdoptLogin(cfg)
-        // 排除集 = 最近 5 轮推过的（≤25 条）+ 看过的。之前只排除上一轮 5 条，
-        // 决赛圈 24 个位置剔除 5 个之后还是同一批老面孔。
-        const exclude = [...new Set([...flattenShown(recentShown), ...history.map((it) => it.bvid)])]
+        const exclude = excludesNow()
         const aff = affinityOf()
         if (aff.ready) logInfo('affinity:on', `${aff.total} 条赞踩参与打分`)
-        const r = await buildPool({ ...cfg, exclude, affinity: aff }, (m) => log(m), prevPool)
+        refreshUps()
+        const r = await buildPool(
+          { ...cfg, exclude, affinity: aff, upsList: [...upsTiers.regular, ...upsTiers.observing] },
+          (m) => log(m),
+          prevPool,
+        )
         logInfo('feed:built', JSON.stringify(r.stats || {}))
         // 自动判定 freshness：只看年龄中位，不数条数。
         // 手填过的轴（freshnessAuto === false 且已有值）不覆盖。
@@ -513,7 +600,13 @@ export function apply(ctx, config) {
             const byBvid = new Map(shortlist.map((x) => [x.bvid, x]))
             const curated = c.picks.map((p, i) => ({ ...byBvid.get(p.bvid), why: p.why, rank: i + 1 }))
             const enriched = await enrichReasons(curated, cfg)
-            feedCache = withoutWatched({ ...out, main: enriched, curated: true, curatorMs: Date.now() - t1 })
+            // 防回音室（策展路径）：模型自己挑的时候不受规则那边 2 条上限的约束，
+            // 熟人加权后很容易被一口气挑 3 个 —— 这里把最终 5 条再收一次。
+            const echoCapNow = Math.max(1, Math.ceil((Number(cfg.mainCount) || 5) * 0.4))
+            const ec = capCuratedEcho(enriched, shortlist, echoCapNow)
+            if (ec.trimmed) logInfo('echo:cap', `策展结果里有 ${ec.echo} 条熟人来源，换掉 ${ec.trimmed} 条（上限 ${echoCapNow}）`)
+            if (out.stats) out.stats.echoGuard = { ...(out.stats.echoGuard || {}), cap: echoCapNow, final: ec.echo, curatedTrimmed: ec.trimmed }
+            feedCache = withoutWatched({ ...out, main: ec.main, curated: true, curatorMs: Date.now() - t1 })
             logInfo('curate:ok', `${curated.length} 条 / ${Date.now() - t1}ms`)
             for (const p of c.picks) reasons[p.bvid] = { text: p.why, at: Date.now() }
             saveReasonCache(reasonsFile, reasons)
@@ -537,6 +630,41 @@ export function apply(ctx, config) {
       }
     })()
     return building
+  }
+
+  /**
+   * 轻量探测（0.3.0）：3–24 小时那一档。
+   * 只问一句「有没有值得提前装进来的新片」，命中就排队一次完整重建。
+   * 探测本身不调模型、不算分，所以很便宜；跑完把 probedAt 推到现在（触发即清零）。
+   */
+  function kickProbe(reason) {
+    if (probing) return probing
+    probing = (async () => {
+      try {
+        const cfg = cfgNow()
+        refreshAt.probedAt = Date.now()
+        saveRefreshAt()
+        logInfo('refresh:trigger', `probe（${reason || ''}）`)
+        const t0 = Date.now()
+        const r = await lightProbe(
+          { ...cfg, exclude: excludesNow() },
+          { ups: upsTiers.regular, log },
+        )
+        logInfo('probe:run', `${r.checkedUp} 个熟人 / ${r.searched} 次搜索 / ${r.tookMs}ms`)
+        if (r.hit.length) {
+          logInfo('probe:hit', `${r.hit.length} 条 → 排队完整重建｜${r.hit.slice(0, 3).map((x) => x.title.slice(0, 18)).join(' / ')}`)
+          // 命中说明真有新鲜事：这时候值得花一次完整重建
+          await kickBuild(`探测命中 ${r.hit.length} 条`)
+        } else {
+          logInfo('probe:hit', `0 条（${Date.now() - t0}ms）`)
+        }
+      } catch (e) {
+        logWarn('probe:fail', String(e?.message ?? e))
+      } finally {
+        probing = null
+      }
+    })()
+    return probing
   }
 
   /** 给当前这批补理由（没走策展人时用） */
@@ -882,7 +1010,21 @@ export function apply(ctx, config) {
         return sendJson(res, 400, { ok: false, error: '要 {bvid, action: like|dislike}' })
       }
       const item = [...(feedCache?.main || []), ...(feedCache?.up || [])].find((x) => x.bvid === bvid) || {}
-      const row = { ts: Date.now(), bvid, action, axis: item.axis || '', sub: item.sub || '', tags: (item.tags || []).slice(0, 6) }
+      // 去重（0.3.0）：同一条 bvid + 同一个动作只记一次。
+      // 之前一条视频能被记 3 行（前端重复触发），熟人分数跟着虚高。
+      let dup = false
+      try {
+        const lines = readFileSync(feedbackFile, 'utf8').split(/\r?\n/).filter(Boolean)
+        for (const l of lines) {
+          try {
+            const r = JSON.parse(l)
+            if (r?.bvid === bvid && r?.action === action) { dup = true; break }
+          } catch { /* 坏行跳过 */ }
+        }
+      } catch { dup = false }
+      if (dup) return sendJson(res, 200, { ok: true, duplicate: true })
+
+      const row = { ts: Date.now(), bvid, action, mid: item.mid || 0, axis: item.axis || '', sub: item.sub || '', tags: (item.tags || []).slice(0, 6) }
       try { appendFileSync(feedbackFile, JSON.stringify(row) + '\n', 'utf8') } catch (e) { logWarn('feedback:write', String(e?.message ?? e)) }
       logInfo('feedback', `${action} ${bvid}`)
       return sendJson(res, 200, { ok: true, row })
@@ -899,8 +1041,8 @@ export function apply(ctx, config) {
       const savedLater = readJson(laterFile, [])
       const item = [...(feedCache?.main || []), ...(feedCache?.up || []), ...savedLater, ...history]
         .find((it) => it.bvid === bvid) || body.item || {}
-      const entry = { bvid, watchedAt: Date.now(), url: `https://www.bilibili.com/video/${bvid}` }
-      for (const key of ['title', 'author', 'durationText', 'play', 'pubdate', 'pct', 'why', 'reasons', 'tags']) {
+      const entry = { bvid, mid: Number(item.mid) || 0, watchedAt: Date.now(), url: `https://www.bilibili.com/video/${bvid}` }
+      for (const key of ['title', 'author', 'durationText', 'play', 'pubdate', 'pct', 'why', 'reasons', 'tags', 'mid']) {
         if (item[key] !== undefined) entry[key] = item[key]
       }
       const nextHistory = [entry, ...history.filter((it) => it.bvid !== bvid)].slice(0, 10)
@@ -936,6 +1078,15 @@ export function apply(ctx, config) {
     }
 
     if (req.method === 'GET' && p === '/feed') {
+      // peek=1：只读当前内存里的片单状态，给客户端轮询「后台重建好了没」用
+      if (url.searchParams.get('peek') === '1') {
+        return sendJson(res, 200, {
+          ok: true,
+          ts: feedCache?.ts || 0,
+          curated: Boolean(feedCache?.curated),
+          building: Boolean(building || probing),
+        })
+      }
       const force = url.searchParams.get('refresh') === '1'
       const r = await getFeed(force)
       return sendJson(res, 200, r)
@@ -1104,4 +1255,27 @@ export function apply(ctx, config) {
 
   log(`已挂载（家=${stateDir}，版本=${version}，池=${prevPool.length}）`)
   refreshStateDoc()
+
+  /**
+   * 三档刷新的心跳（0.3.0）。
+   * 每 60 秒问一次 decideRefresh：该全量就全量、该探测就探测 —— 都是后台跑，
+   * 不阻塞任何请求。挂载 8 秒后先补一次（A3 预热），这样重开 DSH 之后
+   * 你点开罐子时后台已经在干活了。
+   */
+  const tick = (why) => {
+    try {
+      const action = decideRefresh({ now: Date.now(), probedAt: refreshAt.probedAt, fullAt: refreshAt.fullAt, opened: false })
+      if (action === 'full') kickBuild(`定时（${why}）`)
+      else if (action === 'probe') kickProbe(`定时（${why}）`)
+    } catch (e) { logWarn('refresh:tick-fail', String(e?.message ?? e)) }
+  }
+  try {
+    const warm = setTimeout(() => tick('预热'), 8000)
+    if (warm.unref) warm.unref()
+    const timer = setInterval(() => tick('心跳'), 60_000)
+    if (timer.unref) timer.unref()
+    ctx.effect(() => () => { clearTimeout(warm); clearInterval(timer) })
+  } catch (e) {
+    log(`刷新定时器没挂上：${e?.message ?? e}`)
+  }
 }

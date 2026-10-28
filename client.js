@@ -184,6 +184,15 @@
 .msg{font-size:11.5px;line-height:18px;color:var(--muted);padding:12px 6px;text-align:center;}
 .msg b{color:var(--txt);}
 
+/* 后台已经换好、但不打断你手上这批：只提示，点一下才换 */
+.freshbar{display:block;width:calc(100% - 16px);margin:7px 8px 0;padding:6px 8px;cursor:pointer;
+  border:2px dashed var(--blue);border-radius:10px;background:var(--sky-l);color:#25397a;
+  font-family:inherit;font-size:11.5px;font-weight:700;text-align:center;}
+.freshbar:hover{background:var(--sky);}
+/* ⚠️ 必须写这条：上面的 display:block 会盖掉浏览器默认的 [hidden]{display:none}，
+   少了它 hidden=true 根本不起作用（点不掉、一直都在）。.badge / .panel / .corridor 都有同款。 */
+.freshbar[hidden]{display:none;}
+
 .ft{display:flex;align-items:center;gap:7px;padding:9px 12px 12px;border-top:2px dashed #dfe6fb;}
 .ft button{font-size:11.5px;font-weight:800;padding:4px 11px;border-radius:9px;cursor:pointer;font-family:inherit;
   border:2px solid var(--ink);background:var(--gold);color:#3d2a06;
@@ -416,10 +425,15 @@
         const tsEl = el('span', 'ts', '')
         ft.append(refresh, moreBtn, tsEl)
 
+        // 后台换好了但还没换掉你手上这批 —— 只提示，点一下才换
+        const freshBar = el('button', 'freshbar', '新的一批装好了 · 点此查看')
+        freshBar.type = 'button'
+        freshBar.hidden = true
+
         const corridor = el('div', 'corridor')
         corridor.hidden = true
         corridor.append(el('div', 'trip'))
-        panel.append(hd, tabsEl, bd, corridor, ft)
+        panel.append(hd, freshBar, tabsEl, bd, corridor, ft)
 
         /**
          * 出发 / 回来。三种状态：
@@ -503,7 +517,7 @@
         })
         jar.addEventListener('pointercancel', endDrag)
         jar.addEventListener('lostpointercapture', endDrag)
-        close.addEventListener('click', () => { panel.hidden = true; setJarState(false) })
+        close.addEventListener('click', () => { panel.hidden = true; setJarState(false); stopPeek() })
 
         const onKey = (e) => { if (e.key === 'Escape') { panel.hidden = true; setJarState(false); closeMini() } }
         document.addEventListener('keydown', onKey)
@@ -1508,7 +1522,14 @@
 
           const list = tab === 'main' ? (feed.main || []) : (feed.up || [])
           if (!list.length) {
-            msg(tab === 'main' ? '今天没凑够。试试「换一批」，或者放宽时长/粉丝。' : '固定关注还是空的：去设置里填几个 UP（UID 或名字）。')
+            if (tab === 'main') {
+              msg('今天没凑够。试试「换一批」，或者放宽时长/粉丝。')
+            } else {
+              // 拉不到投稿时服务端会把原因留在 upErrors：这次别只说「去填 UP」
+              const err = (feed.upErrors || [])[0]
+              if (err) msg(`拉不到 ${err.name} 的投稿：${String(err.message).slice(0, 36)}。多半是 B站 登录过期了，重新扫码就好。`)
+              else msg('固定关注还是空的：去设置里填几个 UP（UID 或名字）。')
+            }
             return
           }
           for (const it of list) {
@@ -1576,7 +1597,7 @@
           if (loading) return
           loading = true
           render()
-          if (force) refresh.disabled = true
+          if (force) { refresh.disabled = true; stopPeek(); freshBar.hidden = true }
           // 真正要等的时候才走：点「换一批」立刻出发；被动刷新等 400ms 还没回来再出发
           if (force) startTrip()
           else setTimeout(() => { if (loading) startTrip() }, 400)
@@ -1587,7 +1608,15 @@
             feed = data
             updateBadge()
             const when = data.ts ? new Date(data.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
-            tsEl.textContent = data.cached ? `${when} 的库存` : `刚装好 · ${Math.round((data.tookMs || 0) / 1000)}s`
+            if (data.stale) {
+              // A1：服务端先给了磁盘上那批（可能是几小时前的），后台正在重装
+              tsEl.textContent = `${when} 装的 · 后台在更新`
+              watchFresh(data.ts)
+            } else {
+              // 没有待更新的批次了，把上次的提示条收掉
+              freshBar.hidden = true
+              tsEl.textContent = data.cached ? `${when} 的库存` : `刚装好 · ${Math.round((data.tookMs || 0) / 1000)}s`
+            }
             loadReasons()
             syncLater()
             syncHistory()
@@ -1605,6 +1634,37 @@
             if (panel.hidden === false) render()
           }
         }
+
+        /** 轮询后台有没有换好；换好了只弹提示条，不自动替换你正在看的卡片 */
+        let peekTimer = null
+        function stopPeek() {
+          if (peekTimer) { clearInterval(peekTimer); peekTimer = null }
+        }
+        function watchFresh(prevTs) {
+          stopPeek()
+          if (panel.hidden) return
+          let tries = 0
+          peekTimer = setInterval(async () => {
+            tries += 1
+            if (tries > 40) { stopPeek(); return }   // 最多看两分钟
+            try {
+              const res = await fetch(API + '/feed?peek=1', { credentials: 'same-origin', cache: 'no-store' })
+              const d = await res.json()
+              if (!d?.ok) return
+              if (d.ts && d.ts !== prevTs) {
+                stopPeek()
+                tsEl.textContent = `${new Date(prevTs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 的库存 · 已更新`
+                freshBar.hidden = false
+                freshBar.textContent = '新的一批装好了 · 点此查看'
+              }
+            } catch { /* 下次再试 */ }
+          }, 3000)
+        }
+        freshBar.addEventListener('click', () => {
+          freshBar.hidden = true
+          stopPeek()
+          openFeed(false)
+        })
 
         render()
 

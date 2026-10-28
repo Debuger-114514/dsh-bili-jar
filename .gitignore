@@ -12,3 +12,4 @@ art-source/
 .github/workflows/
 *.tgz
 .npmrc
+.dsh-ops-update-*.lock
