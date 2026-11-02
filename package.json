@@ -27,6 +27,8 @@
     "NOTICE",
     "docs/publish.md",
     "docs/presets.md",
+    "docs/technical.md",
+    "docs/changelog.md",
     "screenshots.json"
   ],
   "engines": {

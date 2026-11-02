@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>hero source</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  .hero {
+    position: relative;
+    width: 1200px; height: 340px; box-sizing: border-box;
+    padding: 38px 54px 36px;
+    background: #fcfcff;
+    border: 2.5px solid #1e2a63;
+    border-radius: 22px;
+    color: #1e2a63;
+    font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+    display: flex;
+    gap: 44px;
+  }
+  .left { width: 460px; flex: none; display: flex; flex-direction: column; }
+  .eyebrow { font-size: 16px; font-weight: 600; color: #4a6ad0; }
+  h1 { font-size: 62px; line-height: 1.12; margin: 16px 0 14px; font-weight: 700; letter-spacing: 0; }
+  .desc { font-size: 20px; line-height: 1.8; color: #39477f; }
+  .chips { margin-top: auto; display: flex; gap: 10px; }
+  .chip {
+    border: 2px solid #1e2a63; border-radius: 10px; background: #e4efff;
+    padding: 5px 13px; font-size: 16px; font-weight: 600; line-height: 1.5;
+  }
+  .right { flex: 1; display: grid; grid-template-rows: 1fr 1fr; gap: 18px; min-width: 0; padding-right: 158px; }
+  .card {
+    border: 2.5px solid #1e2a63; border-radius: 16px; background: #fff;
+    padding: 14px 18px; box-shadow: 5px 6px 0 rgba(30, 42, 99, .14);
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .row { display: flex; gap: 12px; align-items: center; }
+  .badge {
+    flex: none; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 14px; font-weight: 700; letter-spacing: .02em;
+    border: 2px solid #1e2a63; border-radius: 8px; padding: 3px 8px; background: #a9cdf5;
+  }
+  .badge.gold { background: #f6d488; }
+  .card h3 { margin: 0; font-size: 22px; font-weight: 700; line-height: 1.4; }
+  .card p { margin: 8px 0 0; font-size: 18px; line-height: 1.6; color: #39477f; }
+  .mascot { position: absolute; right: 58px; bottom: -44px; height: 248px; width: auto; }
+  .stage { padding-bottom: 46px; }
+</style>
+</head>
+<body>
+<div class="stage">
+<div class="hero">
+  <div class="left">
+    <div class="eyebrow">DSH 插件 · dsh-bili-jar</div>
+    <h1>电子榨菜罐</h1>
+    <div class="desc">鲸鱼娘守在右下角，按你填的口味去翻五条。<br>点开就有东西，不喜欢的可以踩。</div>
+    <div class="chips">
+      <div class="chip">5 条 / 批</div>
+      <div class="chip">全在本地</div>
+      <div class="chip">30 根轴</div>
+    </div>
+  </div>
+  <img class="mascot" src="../../assets/readme/mascot-sticker.png" alt="">
+  <div class="right">
+    <div class="card">
+      <div class="row"><span class="badge">43:40</span><h3>苏联版「空中监狱」</h3></div>
+      <p>讲了 90 年代的一桩越狱，节奏很紧。</p>
+    </div>
+    <div class="card">
+      <div class="row"><span class="badge gold">12:04</span><h3>法国影响力最大的八卦</h3></div>
+      <p>他从组织史讲起，比新闻里那两句清楚。</p>
+    </div>
+  </div>
+</div>
+</div>
+</body>
+</html>
