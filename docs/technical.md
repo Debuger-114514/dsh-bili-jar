@@ -262,7 +262,7 @@ net      = positive - 2 × negative
 | 相关推荐 | `/x/web-interface/archive/related`（种子扩散，40 条） |
 | 粉丝数 | `/x/relation/stat`（`acc/info` 已经不返回 fans） |
 | UP 投稿 | `/x/space/wbi/arc/search` |
-| 字幕 / 播放器 | `/x/player/v2` |
+| 字幕 / 播放器 | `/x/player/wbi/v2`（老的 `/x/player/v2` 会串台，别用） |
 | 扫码登录 | `/x/passport-login/web/qrcode/*` |
 
 **风控**（2026-10 实测，`lib/bili.mjs`）：
@@ -274,6 +274,9 @@ net      = positive - 2 × negative
 - **全局节流 750ms**（`spacePace()`）：3 并发连打 10 个 UP 会有一半被拦，串行就基本不炸。
   节流做在 `userVideos` 里，别让每个调用方自己 `sleep`。
 - 失败两次会返回 `non-json: <!DOCTYPE html>` —— 那是 WAF 拦截页，不是接口变了。
+
+**字幕串台**（0.4.1 实测）：同一条视频的 AI 字幕，老接口偶尔给回**别的视频**的稿子。
+改用 wbi 版 + `subtitleFitsVideo()` 时间轴自检（字幕最后时间戳 > 时长 + 120s 就判废、退热评）。
 
 **登录凭证**：`credential.json` 只在你自己扫码后写入；`adoptCookies()` 接管，POSIX 下 `0600`。
 
@@ -374,6 +377,7 @@ pool-decay-check       池子代谢
 shown-check            排除集格式（含旧格式兼容、轮数可配）
 feedback-check         赞/踩/无感折算 + 路由行为（改主意、撤销、清空历史）
 search-check           每轴搜几个词 / 排序槽
+sub-check              字幕时间轴自检（防串台）
 cold-start-check       冷启动补偿
 fresh-quota-check      新鲜度配额
 growth-check           播放增速

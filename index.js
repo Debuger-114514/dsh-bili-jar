@@ -491,13 +491,15 @@ export function apply(ctx, config) {
     for (let i = 0; i < picks.length; i += 3) {
       const rows = await Promise.all(picks.slice(i, i + 3).map(async (p) => {
         let content = ''
+        let src = ''
         const sub = await videoSubtitle(p.bvid)
-        if (sub.ok) content = sub.text
+        if (sub.ok) { content = sub.text; src = `字幕/${sub.lang || '?'}` }
         else {
           const cm = await videoComments(p.bvid, 20)
-          if (cm.ok) content = cm.text
+          if (cm.ok) { content = cm.text; src = '热评' }
         }
-        logInfo('content:fetch', `${p.bvid} ${content ? content.length + ' 字' : '无内容'}`)
+        // 记来源：出问题时能一眼看出是字幕串了还是压根没字幕
+        logInfo('content:fetch', `${p.bvid} ${content ? content.length + ' 字' : '无内容'}${src ? ' · ' + src : ''}`)
         return { ...p, content }
       }))
       got.push(...rows)
