@@ -92,7 +92,7 @@ test('短密钥全部遮挡，清除密钥后不再显示掩码', async (t) => {
   assert.equal(cleared.apiKeySet, false)
 })
 
-test('观看后移出原列表、递减计数，历史去重且仅保留最近十条，重启后仍生效', async (t) => {
+test('观看后移出原列表、递减计数，历史去重且保留最近三十条，重启后仍生效', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'bili-jar-history-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const videos = Array.from({ length: 13 }, (_, i) => ({
@@ -116,16 +116,16 @@ test('观看后移出原列表、递减计数，历史去重且仅保留最近�
     assert.equal(result.items[0].bvid, videos[i].bvid)
     assert.equal(result.items[0].title, videos[i].title)
     assert.ok(result.items[0].watchedAt > 0)
-    assert.equal(result.items.length, Math.min(i + 1, 10))
+    assert.equal(result.items.length, i + 1)
   }
   const history = (await request('GET', '/history')).items
-  assert.deepEqual(history.map((it) => it.bvid), videos.slice(2, 12).reverse().map((it) => it.bvid))
-  assert.equal(JSON.parse(readFileSync(join(dir, 'history.json'), 'utf8')).length, 10)
+  assert.deepEqual(history.map((it) => it.bvid), videos.slice(0, 12).reverse().map((it) => it.bvid))
+  assert.equal(JSON.parse(readFileSync(join(dir, 'history.json'), 'utf8')).length, 12)
   assert.equal((await request('GET', '/feed')).main.length, 0)
   const repeated = await request('POST', '/history', { bvid: videos[5].bvid })
-  assert.equal(repeated.items.length, 10)
+  assert.equal(repeated.items.length, 12, '0.4.0 起上限 30，12 条不会被挤掉')
   assert.equal(repeated.items[0].bvid, videos[5].bvid)
-  assert.equal(new Set(repeated.items.map((it) => it.bvid)).size, 10)
+  assert.equal(new Set(repeated.items.map((it) => it.bvid)).size, 12)
   assert.equal(repeated.unreadCount, 0)
 
   const restarted = mount(dir)

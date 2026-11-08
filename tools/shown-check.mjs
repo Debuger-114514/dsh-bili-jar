@@ -25,13 +25,31 @@ test('垃圾输入一律回空，不炸', () => {
   assert.deepEqual(parseShown({ rounds: [['BV1'], null, [42, 'BV2']] }), { rounds: [['BV1'], ['BV2']] })
 })
 
-test(`最多记 ${SHOWN_ROUNDS} 轮，新的在最后，超了丢最旧`, () => {
-  assert.equal(SHOWN_ROUNDS, 5)
+test(`默认记 ${SHOWN_ROUNDS} 轮，新的在最后，超了丢最旧`, () => {
+  assert.equal(SHOWN_ROUNDS, 8, '0.4.0 默认从 5 提到 8')
   let s = { rounds: [] }
-  for (let i = 1; i <= 7; i += 1) s = pushRound(s, ['BV' + i])
-  assert.equal(s.rounds.length, 5)
+  for (let i = 1; i <= 10; i += 1) s = pushRound(s, ['BV' + i])
+  assert.equal(s.rounds.length, 8)
   assert.deepEqual(s.rounds[0], ['BV3'], '第 1、2 轮被丢')
-  assert.deepEqual(s.rounds.at(-1), ['BV7'])
+  assert.deepEqual(s.rounds.at(-1), ['BV10'])
+})
+
+test('已推窗口可配：调小只影响参与排除的轮数，不删磁盘上的历史', () => {
+  let s = { rounds: [] }
+  for (let i = 1; i <= 8; i += 1) s = pushRound(s, ['BV' + i])
+  // 配置成 3 轮：只看最近 3 轮
+  assert.deepEqual(flattenShown(s, 3), ['BV6', 'BV7', 'BV8'])
+  // 但落盘还是 8 轮；再调回 8 不会丢东西
+  assert.equal(s.rounds.length, 8)
+  assert.equal(flattenShown(s, 8).length, 8)
+})
+
+test('调大窗口：之前丢掉的老轮次不会凭空回来，但新轮次会累积到新上限', () => {
+  let s = { rounds: [] }
+  for (let i = 1; i <= 8; i += 1) s = pushRound(s, ['BV' + i])
+  s = pushRound(s, ['BV9'], 12)
+  assert.equal(s.rounds.length, 9, '上限取 max(默认 8, 配置 12)')
+  assert.equal(flattenShown(s, 12).length, 9)
 })
 
 test('旧格式升级路径：先读到一轮，再追加新轮', () => {

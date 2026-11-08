@@ -532,6 +532,9 @@
         let loading = false
         let later = loadLater()
         let history = []
+        let historyMax = 30
+        /** 赞/踩/无感 的当前状态：bvid -> 'like'|'dislike'|'skip'（0.4.0 起由后端折算后下发） */
+        let fbState = {}
         let watchQueue = Promise.resolve()
 
         function updateBadge() {
@@ -667,6 +670,58 @@
         }
         window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMini() })
 
+        /** 三档反馈：赞 / 踩 / 无感（0.4.0） */
+        const FEEDBACK_BUTTONS = [
+          ['like', '👍', '喜欢，以后多推这类'],
+          ['dislike', '👎', '不喜欢，以后少推'],
+          ['skip', '😐', '无感：这两周别再推这条，不影响你的口味'],
+        ]
+        const FB_ICON = { like: '👍', dislike: '👎', skip: '😐' }
+        const FB_DONE = { like: '👍 已记', dislike: '👎 已记', skip: '😐 已记' }
+
+        /** 按当前状态，把一张卡上那三个按钮的底色和文案刷一遍 */
+        function paintFeedback(actsEl, bvid) {
+          if (!actsEl) return
+          const cur = fbState[bvid] || ''
+          for (const x of actsEl.querySelectorAll('button[data-act]')) {
+            const a = x.dataset.act
+            if (cur === a) { x.dataset.on = '1'; x.textContent = FB_DONE[a] }
+            else { delete x.dataset.on; x.textContent = FB_ICON[a] }
+          }
+        }
+
+        /** 点一下：同一档再点 = 撤销；换一档 = 覆盖。先本地生效，请求失败再回滚 */
+        async function setFeedback(bvid, act, btn) {
+          const prev = fbState[bvid] || ''
+          const next = prev === act ? 'none' : act
+          const actsEl = btn.closest('.acts')
+          if (next === 'none') delete fbState[bvid]
+          else fbState[bvid] = next
+          paintFeedback(actsEl, bvid)
+          try {
+            const r = await fetch(API + '/feedback', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ bvid, action: next }),
+            })
+            if (!r.ok) throw new Error('HTTP ' + r.status)
+          } catch {
+            if (prev) fbState[bvid] = prev
+            else delete fbState[bvid]
+            paintFeedback(actsEl, bvid)
+          }
+        }
+
+        /** 打开/刷新时拉一次「每条现在是什么状态」，重绘后据此回填按钮 */
+        async function loadFeedback() {
+          try {
+            const res = await fetch(API + '/feedback', { credentials: 'same-origin', cache: 'no-store' })
+            const d = await res.json()
+            if (d.ok && d.state) { fbState = d.state; if (!panel.hidden) render() }
+          } catch { /* 后端不在就空着，不影响看片 */ }
+        }
+
         function card(it) {
           const box = el('div', 'item')
 
@@ -762,24 +817,15 @@
           })
           acts.appendChild(laterBtn)
 
-          for (const [act, label] of [['like', '👍'], ['dislike', '👎']]) {
-            const b = el('button', null, label)
+          for (const [act, icon, tip] of FEEDBACK_BUTTONS) {
+            const b = el('button', null, icon)
             b.type = 'button'
-            b.title = act === 'like' ? '喜欢，以后多推这类' : '不喜欢，以后少推'
-            b.addEventListener('click', async () => {
-              try {
-                await fetch(API + '/feedback', {
-                  method: 'POST',
-                  credentials: 'same-origin',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ bvid: it.bvid, action: act }),
-                })
-                b.dataset.on = '1'
-                b.textContent = act === 'like' ? '👍 已记' : '👎 已记'
-              } catch { /* 失败就算了 */ }
-            })
+            b.title = tip
+            b.dataset.act = act
+            b.addEventListener('click', () => setFeedback(it.bvid, act, b))
             acts.appendChild(b)
           }
+          paintFeedback(acts, it.bvid)
 
           box.appendChild(acts)
           return box
@@ -871,6 +917,10 @@
           box.appendChild(numRow('最长时长（分）', 'maxMinutes', '', 1))
           box.appendChild(numRow('播放门槛', 'minPlay', '', 0))
           box.appendChild(numRow('每轮几条', 'mainCount', '', 1))
+          // 0.4.0：想省请求就调小；调大候选更厚但更慢
+          box.appendChild(numRow('每轴搜几个词', 'searchPerAxis', '1–5，默认 3', 1, 5))
+          // 0.4.0：排除集覆盖最近几轮，越大越不容易撞见老面孔
+          box.appendChild(numRow('已推窗口（轮）', 'shownRounds', '3–20，默认 8', 3, 20))
           // 0 = 每次都一样；1 = 很随机。默认 0.5：前 5 名固定，后面的按分数加权打乱
           box.appendChild(numRow('多样性（0–1）', 'diversity', '0 = 固定，越大越随机', 0, 1, 0.1))
 
@@ -1493,7 +1543,28 @@
         function renderInner() {
           if (tab === 'cfg') { renderCfg(); return }
           if (tab === 'history') {
-            msg('打开视频即计入历史，保留最近 10 条。')
+            const head = el('div', 'row2')
+            head.appendChild(el('span', 'lbl', `打开视频即计入历史，最多留 ${historyMax} 条`))
+            if (history.length) {
+              const clr = el('button', 'ta1', '清空')
+              clr.type = 'button'
+              clr.style.width = 'auto'
+              clr.style.flex = 'none'
+              clr.addEventListener('click', async () => {
+                if (!confirm('清空观看历史？清完之后这些视频可以重新被推荐。')) return
+                try {
+                  const r = await fetch(API + '/history', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ clear: true }),
+                  })
+                  const d = await r.json()
+                  if (d.ok) { history = []; render() }
+                } catch { /* 失败就算了，下次再点 */ }
+              })
+              head.appendChild(clr)
+            }
+            bd.appendChild(head)
             if (!history.length) { msg('还没有观看记录。'); return }
             for (const it of history) bd.appendChild(card(it))
             return
@@ -1667,6 +1738,7 @@
         })
 
         render()
+        loadFeedback()
 
         async function syncHistory() {
           try {
@@ -1674,6 +1746,7 @@
             const data = await res.json()
             if (res.ok && data.ok && Array.isArray(data.items)) {
               history = data.items
+              if (Number(data.max) > 0) historyMax = Number(data.max)
               if (tab === 'history') render()
             }
           } catch { /* 下次打开历史时重试 */ }

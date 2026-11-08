@@ -27,6 +27,7 @@ import { writeStateDoc } from './lib/statefile.mjs'
 import { curate } from './lib/curator.mjs'
 import { freshnessOf, isFreshness } from './lib/freshness.mjs'
 import { parseShown, pushRound, flattenShown } from './lib/shown.mjs'
+import { foldFeedback, upsRows, bvidsWith, recentSkips, countVotes, ALL_ACTIONS, SKIP_DAYS } from './lib/feedback.mjs'
 import { adoptCookies, videoSubtitle, videoComments, loginStart, loginPoll, hasLogin } from './lib/bili.mjs'
 import { qrDataUrl } from './lib/qr.mjs'
 import { setLogFile, info as logInfo, warn as logWarn, tail as logTail } from './lib/log.mjs'
@@ -86,6 +87,10 @@ const DEFAULTS = {
   useScrollLogin: false,
   /** 头像预设：sleep / tv / explore / other（custom = 自己上传的） */
   avatarPreset: 'sleep',
+  /** 每根轴搜几个词（1–5）。少了省请求，多了候选更厚 */
+  searchPerAxis: 3,
+  /** 「已推过」要记几轮（3–20）。越大越不容易重复，但可选池也会变薄 */
+  shownRounds: 8,
 }
 
 /**
@@ -108,6 +113,8 @@ export const Config = !z ? undefined : z.object({
   explainOn: z.boolean().default(true).extra('volatile', true),
   /** 推荐理由的语气与风格 */
   reasonStyle: z.string().default('').extra('volatile', true),
+  searchPerAxis: z.natural().default(3).extra('volatile', true),
+  shownRounds: z.natural().default(8).extra('volatile', true),
 })
 
 /**
@@ -117,6 +124,9 @@ export const Config = !z ? undefined : z.object({
  * 真正的重建时机交给 lib/refresh.mjs 的三档（3h 打开 / 6h 自动 / 24h 全量）。
  */
 const FEED_TTL = 3 * 3600 * 1000
+
+/** 观看历史最多留几条（0.4.0 从 10 提到 30） */
+const HISTORY_MAX = 30
 
 const unwrap = (v) => (v && typeof v === 'object' && 'value' in v ? v.value : v)
 
@@ -263,7 +273,7 @@ export function apply(ctx, config) {
     return j && j.ts ? j : null
   })()
   let history = readJson(historyFile, [])
-  history = Array.isArray(history) ? history.filter((it) => it?.bvid).slice(0, 10) : []
+  history = Array.isArray(history) ? history.filter((it) => it?.bvid).slice(0, HISTORY_MAX) : []
   function withoutWatched(next) {
     if (!next) return next
     const watched = new Set([
@@ -357,6 +367,10 @@ export function apply(ctx, config) {
       contentSource: toStr(merged.contentSource) || DEFAULTS.contentSource,
       useScrollLogin: merged.useScrollLogin === true,
       avatarPreset: toStr(merged.avatarPreset) || DEFAULTS.avatarPreset,
+      // 每轴搜几个词：1–5，缺省 3
+      searchPerAxis: Math.max(1, Math.min(5, Math.round(toNum(merged.searchPerAxis, DEFAULTS.searchPerAxis)))),
+      // 已推窗口几轮：3–20，缺省 8
+      shownRounds: Math.max(3, Math.min(20, Math.round(toNum(merged.shownRounds, DEFAULTS.shownRounds)))),
     }
   }
 
@@ -368,19 +382,32 @@ export function apply(ctx, config) {
    * bvid → UP/tag 的映射从池子和当前片单里找（都是刚落过盘的）。
    */
   /**
-   * 从本地行为里认出「熟人」（0.3.0）。
+   * 读 feedback.jsonl 的原始行。文件很小（一条一行），每次建池读一遍无所谓。
+   */
+  function readFeedbackRows() {
+    try {
+      return readFileSync(feedbackFile, 'utf8').split(/\r?\n/).filter(Boolean)
+        .map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+    } catch { return [] }
+  }
+
+  /**
+   * 当前状态：每条视频最后一次的选择（赞 / 踩 / 无感；撤销过的不在内）。
+   * 0.4.0 起这是单一事实来源 —— 打分、熟人名单、排除集、前端按钮都读它。
+   */
+  function feedbackState() {
+    return foldFeedback(readFeedbackRows())
+  }
+
+  /**
+   * 从本地行为里认出「熟人」（0.3.0；0.4.0 改用折算后的状态）。
    * 输入全是已有的本地文件：点赞/踩、点开过、稍后看、上一轮池子（补 mid）。
-   * 结果写 ~/.dsh/bili-jar/ups.json，同时在日志里报一行，**不占设置页界面**。
+   * ⚠️「无感」不计入：没态度不等于不喜欢，拿它扣分是误伤。
    */
   function refreshUps() {
     try {
-      let feedback = []
-      try {
-        feedback = readFileSync(feedbackFile, 'utf8').split(/\r?\n/).filter(Boolean)
-          .map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
-      } catch { feedback = [] }
       const list = buildUpList({
-        feedback,
+        feedback: upsRows(feedbackState()),
         history,
         later: readJson(laterFile, []),
         pool: [...(prevPool || []), ...((feedCache && feedCache.main) || [])],
@@ -395,11 +422,9 @@ export function apply(ctx, config) {
   }
 
   function affinityOf() {
-    let rows = []
-    try {
-      rows = readFileSync(feedbackFile, 'utf8').split(/\r?\n/).filter(Boolean)
-        .map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
-    } catch { rows = [] }
+    // 用「当前状态」而不是原始行：改主意 / 撤销之后不该还按旧票数算
+    const st = feedbackState()
+    const rows = [...st.values()]
     const meta = new Map()
     for (const it of [...(prevPool || []), ...((feedCache && feedCache.main) || [])]) {
       if (it?.bvid) meta.set(it.bvid, it)
@@ -421,8 +446,10 @@ export function apply(ctx, config) {
         for (const t of (m.tags || []).slice(0, 6)) bump(tagDislikes, t)
       }
     }
-    const ready = rows.length >= FEEDBACK_MIN
-    return { ready, total: rows.length, authors, dislikes, tags, tagDislikes }
+    // 阈值按「当前还有效的赞/踩条数」算（无感不算）
+    const votes = countVotes(st)
+    const ready = votes.total >= FEEDBACK_MIN
+    return { ready, total: votes.total, authors, dislikes, tags, tagDislikes }
   }
 
   /**
@@ -501,8 +528,17 @@ export function apply(ctx, config) {
   }
 
   /** 排除集：最近 5 轮推过的 + 看过的 —— 建池和探测共用 */
-  function excludesNow() {
-    return [...new Set([...flattenShown(recentShown), ...history.map((it) => it.bvid)])]
+  function excludesNow(cfg = {}) {
+    const st = feedbackState()
+    return [...new Set([
+      // 最近 N 轮推过的（N = 设置里的「已推窗口」，默认 8）
+      ...flattenShown(recentShown, cfg.shownRounds),
+      ...history.map((it) => it.bvid),
+      // 待看的：用户已经存下了，别再推一次（0.4.0 修）
+      ...readJson(laterFile, []).map((it) => it?.bvid).filter(Boolean),
+      // 「无感」过的：14 天内不再出现（0.4.0）
+      ...recentSkips(st, { days: SKIP_DAYS }),
+    ])]
   }
 
   /**
@@ -534,7 +570,7 @@ export function apply(ctx, config) {
         const t0 = Date.now()
         const cfg = cfgNow()
         maybeAdoptLogin(cfg)
-        const exclude = excludesNow()
+        const exclude = excludesNow(cfg)
         const aff = affinityOf()
         if (aff.ready) logInfo('affinity:on', `${aff.total} 条赞踩参与打分`)
         refreshUps()
@@ -563,7 +599,7 @@ export function apply(ctx, config) {
         } catch (e) { log(`freshness 判定失败：${e?.message ?? e}`) }
         const out = { ...r, tookMs: Date.now() - t0, cached: false, excluded: exclude.length }
         feedCache = withoutWatched(out)
-        recentShown = pushRound(recentShown, (r.main || []).map((c) => c.bvid))
+        recentShown = pushRound(recentShown, (r.main || []).map((c) => c.bvid), cfg.shownRounds)
         try { writeFileSync(shownFile, JSON.stringify(recentShown), 'utf8') } catch { /* 无所谓 */ }
         if (Array.isArray(r.pool)) {
           prevPool = r.pool
@@ -647,7 +683,7 @@ export function apply(ctx, config) {
         logInfo('refresh:trigger', `probe（${reason || ''}）`)
         const t0 = Date.now()
         const r = await lightProbe(
-          { ...cfg, exclude: excludesNow() },
+          { ...cfg, exclude: excludesNow(cfg) },
           { ups: upsTiers.regular, log },
         )
         logInfo('probe:run', `${r.checkedUp} 个熟人 / ${r.searched} 次搜索 / ${r.tookMs}ms`)
@@ -1001,41 +1037,53 @@ export function apply(ctx, config) {
       return sendJson(res, 200, { ok: true, loggedIn: hasLogin(), ownCredential: existsSync(join(stateDir, 'credential.json')) })
     }
 
-    // 赞 / 踩：只记本地，绝不落到 B站 账号
+    // 当前赞/踩/无感状态：前端打开时拉一次，重绘后据此回填按钮（0.4.0 修「标记丢失」）
+    if (req.method === 'GET' && p === '/feedback') {
+      const st = feedbackState()
+      return sendJson(res, 200, {
+        ok: true,
+        state: Object.fromEntries([...st].map(([bvid, r]) => [bvid, r.action])),
+        counts: countVotes(st),
+        skips: recentSkips(st, { days: SKIP_DAYS }).length,
+      })
+    }
+
+    // 赞 / 踩 / 无感 / 撤销：只记本地，绝不落到 B站 账号
+    // 写入是追加的，状态以「同一条的最后一次」为准（见 lib/feedback.mjs 的 foldFeedback）
     if (req.method === 'POST' && p === '/feedback') {
       const body = await readBody(req)
       const bvid = String(body?.bvid || '').trim()
       const action = String(body?.action || '').trim()
-      if (!bvid || !['like', 'dislike'].includes(action)) {
-        return sendJson(res, 400, { ok: false, error: '要 {bvid, action: like|dislike}' })
+      if (!bvid || !ALL_ACTIONS.includes(action)) {
+        return sendJson(res, 400, { ok: false, error: `要 {bvid, action: ${ALL_ACTIONS.join('|')}}` })
+      }
+      const st = feedbackState()
+      const cur = st.get(bvid)?.action || ''
+      // 已经是这个状态就什么都不写（省日志）；撤销一个本来没记过的也直接回 ok
+      if (action === cur) {
+        return sendJson(res, 200, { ok: true, unchanged: true, action: cur, state: Object.fromEntries([...st].map(([b, r]) => [b, r.action])) })
       }
       const item = [...(feedCache?.main || []), ...(feedCache?.up || [])].find((x) => x.bvid === bvid) || {}
-      // 去重（0.3.0）：同一条 bvid + 同一个动作只记一次。
-      // 之前一条视频能被记 3 行（前端重复触发），熟人分数跟着虚高。
-      let dup = false
-      try {
-        const lines = readFileSync(feedbackFile, 'utf8').split(/\r?\n/).filter(Boolean)
-        for (const l of lines) {
-          try {
-            const r = JSON.parse(l)
-            if (r?.bvid === bvid && r?.action === action) { dup = true; break }
-          } catch { /* 坏行跳过 */ }
-        }
-      } catch { dup = false }
-      if (dup) return sendJson(res, 200, { ok: true, duplicate: true })
-
       const row = { ts: Date.now(), bvid, action, mid: item.mid || 0, axis: item.axis || '', sub: item.sub || '', tags: (item.tags || []).slice(0, 6) }
       try { appendFileSync(feedbackFile, JSON.stringify(row) + '\n', 'utf8') } catch (e) { logWarn('feedback:write', String(e?.message ?? e)) }
       logInfo('feedback', `${action} ${bvid}`)
-      return sendJson(res, 200, { ok: true, row })
+      return sendJson(res, 200, { ok: true, action, previous: cur, row })
     }
 
-    // 打开视频即记为已观看；历史只保留最近 10 条，同一视频再次打开时移到最前。
+    // 打开视频即记为已观看；历史上限 HISTORY_MAX 条，同一视频再次打开时移到最前。
     if (req.method === 'GET' && p === '/history') {
-      return sendJson(res, 200, { ok: true, items: history })
+      return sendJson(res, 200, { ok: true, items: history, max: HISTORY_MAX })
     }
     if (req.method === 'POST' && p === '/history') {
       const body = await readBody(req)
+      // 清空：0.4.0 加的，清完之前看过的可以重新被推荐
+      if (body?.clear === true) {
+        writeFileSync(historyFile, '[]', 'utf8')
+        history = []
+        refreshStateDoc()
+        logInfo('history:clear', '用户清空了观看历史')
+        return sendJson(res, 200, { ok: true, items: [], max: HISTORY_MAX })
+      }
       const bvid = String(body?.bvid || '').trim()
       if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) return sendJson(res, 400, { ok: false, error: '无效的 bvid' })
       const savedLater = readJson(laterFile, [])
@@ -1045,7 +1093,7 @@ export function apply(ctx, config) {
       for (const key of ['title', 'author', 'durationText', 'play', 'pubdate', 'pct', 'why', 'reasons', 'tags', 'mid']) {
         if (item[key] !== undefined) entry[key] = item[key]
       }
-      const nextHistory = [entry, ...history.filter((it) => it.bvid !== bvid)].slice(0, 10)
+      const nextHistory = [entry, ...history.filter((it) => it.bvid !== bvid)].slice(0, HISTORY_MAX)
       writeFileSync(historyFile, JSON.stringify(nextHistory), 'utf8')
       history = nextHistory
       feedCache = withoutWatched(feedCache)
@@ -1104,7 +1152,14 @@ export function apply(ctx, config) {
       if (!f || !Array.isArray(f.main)) return sendJson(res, 200, { ok: false, error: '还没有片单，先刷一批' })
       if (f.main.length >= 30) return sendJson(res, 200, { ok: false, error: '已经 30 条了，先看一阵子吧；想换就点「换一批」' })
 
-      const have = new Set([...f.main.map((x) => x.bvid), ...(f.watchedBvids || []), ...history.map((it) => it.bvid)])
+      // 排除集和「换一批」保持一致：待看的 和 14 天内「无感」过的都不再捞（0.4.0）
+      const have = new Set([
+        ...f.main.map((x) => x.bvid),
+        ...(f.watchedBvids || []),
+        ...history.map((it) => it.bvid),
+        ...readJson(laterFile, []).map((it) => it?.bvid).filter(Boolean),
+        ...recentSkips(feedbackState(), { days: SKIP_DAYS }),
+      ])
       // 先决赛圈（本来就是按分数排好的），再整个池子 —— 池子没分数，按互动率排
       const rateOf = (x) => (x.pct?.coin || 0) * 2 + (x.pct?.fav || 0) * 2 + (x.pct?.like || 0)
       const seen = new Set()

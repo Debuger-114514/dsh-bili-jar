@@ -66,8 +66,9 @@
 几条约定：
 
 - **为什么只给模型 24 条**：给整个池子也能挑，但一次调用会贵十倍，挑得还未必更好。
-- **排除集**：「换一批」排除最近 5 轮推过的（≤25 条）+ 已观看的。之前只排除上一轮那 5 条，
-  池子里的老面孔每轮都回来。
+- **排除集**：「换一批」排除 —— 最近 N 轮推过的（N = `shownRounds`，默认 8，可配 3–20）+
+  已观看的 + 待看的 + 14 天内点过 😐 的。之前只排除上一轮那 5 条，池子里的老面孔每轮都回来；
+  窗口太短则一周左右就转回来（issue #3 的第 2、3 条）。
 - **没有模型也能跑**：`curatorOn` 关掉或调用失败时退回纯规则挑片 —— 每根轴先挑一条相似度 ≥0.85 的，
   同轴最多 2 条、同 UP 最多 1 条。
 
@@ -178,11 +179,15 @@
 
 `lib/ups.mjs`，纯函数，不联网、不读文件。
 
-**输入**：`feedback.jsonl`（👍/👎）、`history.json`（点开过）、`later.json`（稍后看）、
+**输入**：`feedback.jsonl` 折出来的**当前状态**（👍/👎；😐 不算）、`history.json`（点开过）、`later.json`（稍后看）、
 上一轮池子（补全老数据缺失的 `mid`）。
 
-**去重**：同一条 bvid 的同一个动作只算一次。先按 bvid 去重再计数 —— 真实数据里
-一条视频被记 3 行是常态（前端重复触发），不去重的话熟人分数天生虚高。
+**去重与折算**：`feedback.jsonl` 是追加日志（改主意、撤销都各写一行），所以先按 ts 折出
+「每条最后一次的选择」（`lib/feedback.mjs` 的 `foldFeedback`），再计数。真实数据里一条视频
+被记 3 行是常态，不折算的话熟人分数天生虚高。
+
+**😐 无感不算互动**：`action=skip` 只让这条 14 天不再进推荐，不进 `net` 公式 ——
+没态度不等于不喜欢，拿它扣 UP 的分是误伤。
 
 **时间窗**：只统计最近 180 天（`UP_WINDOW_MS`）。
 
@@ -309,12 +314,12 @@ net      = positive - 2 × negative
 | `config.json` | 面板设置 + 语气预设（**含明文 API Key**） |
 | `feed.json` | 当前片单（main / shortlist / up / pool / stats） |
 | `pool.json` | 累积候选池（上限 400） |
-| `shown.json` | 最近 5 轮推过什么（排除集用） |
+| `shown.json` | 最近 N 轮推过什么（排除集用，默认 8 轮） |
 | `reasons.json` | 攒下来的推荐理由，关掉再开还能用 |
 | `usage.json` | 每次调用的 token 和费用 |
-| `feedback.jsonl` | 赞踩，一行一条，按 (bvid, action) 去重 |
+| `feedback.jsonl` | 赞/踩/无感/撤销，追加写；状态由最后一条折算 |
 | `later.json` | 待看 |
-| `history.json` | 最近 10 条观看记录 |
+| `history.json` | 最近 30 条观看记录 |
 | `credential.json` | B 站登录（扫码才有） |
 | `ups.json` | 熟人名单 |
 | `refresh.json` | `{probedAt, fullAt}` |
@@ -340,7 +345,8 @@ net      = positive - 2 × negative
 | `lib/curator.mjs` | 让模型挑片并写理由 |
 | `lib/reasons.mjs` | 写理由（API 直连 → 宿主模型兜底），带磁盘缓存 |
 | `lib/usage.mjs` | token 记账 + 峰谷计价 |
-| `lib/shown.mjs` | 「最近推过什么」的存取 |
+| `lib/shown.mjs` | 「最近推过什么」的存取（轮数可配） |
+| `lib/feedback.mjs` | 赞/踩/无感 的当前状态折算（纯函数） |
 | `lib/statefile.mjs` | 生成 `STATE.md` |
 | `lib/log.mjs` | JSONL 日志 |
 | `lib/qr.mjs` | 零依赖 QR 编码器 |
@@ -365,7 +371,9 @@ tree-suggestions-check 子簇建议
 freshness-check        时效判定
 score-freshness-check  时效权重
 pool-decay-check       池子代谢
-shown-check            排除集格式（含旧格式兼容）
+shown-check            排除集格式（含旧格式兼容、轮数可配）
+feedback-check         赞/踩/无感折算 + 路由行为（改主意、撤销、清空历史）
+search-check           每轴搜几个词 / 排序槽
 cold-start-check       冷启动补偿
 fresh-quota-check      新鲜度配额
 growth-check           播放增速
