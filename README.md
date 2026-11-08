@@ -208,6 +208,11 @@ B 站登录是可选的：登了才能取 AI 字幕，「关注」页也得靠�
 - [`docs/tag-tree.md`](docs/tag-tree.md)：tag 聚类和分区骨架
 - [`docs/open-issues.md`](docs/open-issues.md)：踩过的坑和怎么修的
 
+## 致谢
+
+- [@fgql](https://github.com/fgql) —— [issue #3](https://github.com/Debuger-114514/dsh-bili-jar/issues/3) 一次提了 6 条，连代码行号都标好了；0.4.0 基本按那几条改
+- [@livandan](https://github.com/livandan) —— 两个 PR：[#1](https://github.com/Debuger-114514/dsh-bili-jar/pull/1) 空兴趣轴保留 + 观看历史，[#2](https://github.com/Debuger-114514/dsh-bili-jar/pull/2) 子簇建议去重
+
 ## 许可
 
 代码 MIT。插画（`assets/jar-*.png` / `av-*.png` / `walk-*.png`）由作者用豆包生成，随仓库提供，只用于这个插件的界面。
