@@ -294,6 +294,32 @@ net      = positive - 2 × negative
 
 历史记录按每条自己的时间戳重算，改规则会把旧账一起修正（`migrateUsage`）。
 
+### 模型调用的预算（`lib/llm.mjs`）
+
+`max_tokens` 是**含思维链**的总输出额度：思考模型（`deepseek-flash`、`deepseek-reasoner`）先写
+`reasoning_content` 再写 `content`，两部分都算在同一个额度里。0.4.1 及以前这里给得太小
+（策展 900、单条理由 220），实测 25 条候选光思考就要 3072 token，于是 `finish_reason=length`、
+`content` 为空 —— 表现成「API 空响应」，策展退回规则片单（issue #4）。
+
+现在的规则：
+
+| 调用 | 预算 | 思考 |
+|---|---|---|
+| 策展（挑 5 条并写理由） | 4000 | 开（挑片是判断题） |
+| 照字幕/热评写推荐语 | 2000 | 关 |
+| 单条一句话理由 | 1200 | 关 |
+| 展开长理由 | 1600 | 关 |
+| 子簇筛选 | 1200 | 关 |
+
+- 预算有下限 `MIN_BUDGET = 1024`，调用方给更小的值会被抬上来
+- 预算阶梯：起点 → 翻倍 → `BUDGET_CAP = 8192`；`finish_reason=length` 或空正文就换下一档重试，
+  **最后一档强制关思考**（宁可少想，也要把结果交出来）
+- 关思考用的是官方字段 `{"thinking":{"type":"disabled"}}`；
+  见 [思考模式](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)。写成一句 40–70 字的推荐语不需要思维链，
+  同一条视频的输出从 475 token 降到 40
+- 网关不认这个字段时自动去掉重发，并按 `base|model` 记住，之后不再发
+- 多档重试的 token 用量按实际发生合并记账；`/debug` 的 `llmLast` 能看到每档的 `budget` / `finish` / token
+
 ---
 
 ## 安全
@@ -366,10 +392,10 @@ node tools/sim-freshness.mjs       # 离线模拟时效判定
 node tools/pack-check.mjs          # 发版前自检
 ```
 
-单测（`node:test`，`pnpm test` 跑前 13 个）：
+单测（`node:test`，`pnpm test` 跑一整套）：
 
 ```
-config-check           配置读取与默认值
+config-check           配置读取与默认值（含 /debug 字段）
 tree-suggestions-check 子簇建议
 freshness-check        时效判定
 score-freshness-check  时效权重
@@ -378,6 +404,7 @@ shown-check            排除集格式（含旧格式兼容、轮数可配）
 feedback-check         赞/踩/无感折算 + 路由行为（改主意、撤销、清空历史）
 search-check           每轴搜几个词 / 排序槽
 sub-check              字幕时间轴自检（防串台）
+llm-check              模型预算阶梯、超限重试、关思考、参数兜底（0.4.2）
 cold-start-check       冷启动补偿
 fresh-quota-check      新鲜度配额
 growth-check           播放增速
@@ -389,6 +416,11 @@ affinity-check         赞踩加权
 qr-check               QR 编码器 vs Python qrcode 逐位比对
 score-check            打分
 ```
+
+⚠️ 别用 `node --test tools/*.mjs` 这种通配跑 —— 目录里混着 `build-presets.mjs`、
+`crawl-tags.mjs` 这类**会真的去改仓库文件**的脚本，当成测试执行一遍就会把
+`lib/axis-presets.mjs` 重新生成（踩过一次，git diff 里冒出一千多行）。按 `package.json`
+里那份清单跑。
 
 另有几个诊断脚本：`tools/up-probe.mjs`（固定 UP 拉不到投稿时四种写法对照）、
 `tools/rl-probe.mjs`（连打 space 接口看多少下被风控）、`tools/sub.mjs`、`tools/tag-probe.mjs`。

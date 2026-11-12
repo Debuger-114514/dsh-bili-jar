@@ -71,6 +71,10 @@ test('API 密钥保存后仅返回首尾五位，读取和调试接口保持一�
   const debug = await request('GET', '/debug')
   assert.equal(debug.cfg.apiKey, masked)
   assert.equal(debug.overrides.apiKey, masked)
+  // 0.4.2：调试接口要能看到最后一次模型调用的现场（issue #4 靠这个定位）
+  assert.equal(debug.llmBudget.min, 1024)
+  assert.equal(debug.llmBudget.cap, 8192)
+  assert.deepEqual(debug.llmLast.attempts, [])
   const unchanged = await request('POST', '/config', { axes: [] })
   assert.equal(unchanged.apiKeyMasked, masked)
   assert.equal(JSON.stringify(unchanged).includes(key), false)
@@ -142,7 +146,8 @@ test('没有本地子簇候选时不请求模型，有候选时每次筛选各�
   let calls = 0
   t.mock.method(globalThis, 'fetch', async (_url, options) => {
     calls++
-    assert.equal(JSON.parse(options.body).max_tokens, 700)
+    // 0.4.2：子簇筛选的预算从 700 抬到 1200（思考模型会把思维链算进 max_tokens）
+    assert.equal(JSON.parse(options.body).max_tokens, 1200)
     return { ok: true, text: async () => JSON.stringify({
       choices: [{ message: { content: '[{"i":1,"keep":false,"why":"不合适"}]' } }],
       usage: { prompt_tokens: 120, completion_tokens: 30 },

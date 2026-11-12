@@ -23,6 +23,7 @@ import { AXIS_TREE, AXIS_BASE, setUserTree, getUserTree, nodeFor, suggestSubs } 
 import { reviewClusters } from './lib/tree-review.mjs'
 import { writeReason, writeReasonCore, loadReasonCache, saveReasonCache, setUsageFile, lastError as llmError } from './lib/reasons.mjs'
 import { todayUsage, migrateUsage } from './lib/usage.mjs'
+import { lastCall as llmLastCall, MIN_BUDGET as LLM_MIN_BUDGET, BUDGET_CAP as LLM_BUDGET_CAP } from './lib/llm.mjs'
 import { writeStateDoc } from './lib/statefile.mjs'
 import { curate } from './lib/curator.mjs'
 import { freshnessOf, isFreshness } from './lib/freshness.mjs'
@@ -518,7 +519,8 @@ export function apply(ctx, config) {
     const user = usable.map((x, i) => `${i + 1}. ${x.bvid} 《${x.title}》\n内容：${x.content.slice(0, 900)}`).join('\n\n')
 
     const text = await writeReasonCore(ctx, {
-      system, user, maxTokens: 900, timeoutMs: 60000,
+      // 0.4.2：900 → 2000。写一句话不需要思考（关掉），但预算得留够正文
+      system, user, maxTokens: 2000, timeoutMs: 60000,
       api: { base: cfg.apiBase, key: cfg.apiKey, model: cfg.apiModel },
     })
     if (!text) { logWarn('content:llm-fail', llmError.msg || '空'); return picks }
@@ -999,6 +1001,9 @@ export function apply(ctx, config) {
         poolSize: prevPool.length,
         llm: Boolean(safe(() => ctx.llm || ctx.get?.('llm'), null)),
         llmError: llmError.msg,
+        // 0.4.2：最后一次模型调用的现场（试了几档预算、每档多少 token、是不是被思考吃光）
+        llmLast: { ...llmLastCall },
+        llmBudget: { min: LLM_MIN_BUDGET, cap: LLM_BUDGET_CAP },
         usage: todayUsage(usageFile),
       })
     }
@@ -1272,7 +1277,8 @@ export function apply(ctx, config) {
           item.why ? `一句话理由：${item.why}` : '',
         ].filter(Boolean).join('\n')
         const long = await writeReasonCore(ctx, {
-          system, user, maxTokens: 400, timeoutMs: 45000,
+          // 0.4.2：400 → 1600（100–160 字的一段话，思考模型 400 会直接空响应）
+          system, user, maxTokens: 1600, timeoutMs: 45000,
           api: { base: c.apiBase, key: c.apiKey, model: c.apiModel },
         })
         if (long) {
